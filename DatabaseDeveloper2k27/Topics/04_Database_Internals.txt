@@ -1,0 +1,416 @@
+DATABASE INTERNALS – COMPLETE MASTER CHECKLIST
+Target: Database Developer / Database Engineer
+Databases: Oracle | PostgreSQL | MySQL
+
+
+==================================================
+1. DATABASE ARCHITECTURE
+==================================================
+- Database Architecture
+- DBMS Architecture
+- Client-Server Architecture
+- Shared Nothing Architecture
+- Shared Disk Architecture
+- Database Instance vs Database
+- Memory Architecture
+- Process Architecture
+- Connection Management
+- Connection Pooling
+- Background Processes
+- Buffer Management
+- Storage Management
+
+==================================================
+2. STORAGE ENGINE INTERNALS
+==================================================
+- Storage Engine Architecture
+- Heap Tables
+- Clustered Tables
+- Clustered Index Storage
+- Row-Based Storage
+- Columnar Storage
+- Pages and Blocks
+- Data Files
+- Tablespaces
+- Extents
+- Segments
+- Free Space Management
+- Page Layout
+- Row Format
+- Compression
+- Data Page Splitting
+
+==================================================
+3. INDEXING INTERNALS
+==================================================
+- Index Fundamentals
+- B-Tree Index
+- B+ Tree Index
+- Hash Index
+- Bitmap Index
+- Clustered Index
+- Non-Clustered Index
+- Composite Index
+- Covering Index
+- Unique Index
+- Partial Index
+- Functional Index
+- Expression Index
+- Full-Text Index
+- Reverse Key Index
+- GiST Index
+- GIN Index
+- BRIN Index
+- Index Selectivity
+- Index Cardinality
+- Index Statistics
+- Index Fragmentation
+- Index Rebuilding
+- Index Maintenance
+- Index Scan
+- Index Seek
+- Index Only Scan
+- Index Range Scan
+- Index Skip Scan
+
+==================================================
+4. QUERY PROCESSING & OPTIMIZATION
+==================================================
+- SQL Parsing
+- Semantic Analysis
+- Query Rewriting
+- Query Optimization
+- Query Execution
+- Cost-Based Optimizer (CBO)
+- Rule-Based Optimization
+- Statistics Collection
+- Cardinality Estimation
+- Selectivity Estimation
+- Histograms
+- Execution Plan Generation
+- Execution Plan Analysis
+- Predicate Pushdown
+- Projection Pushdown
+- Partition Pruning
+- Join Reordering
+- Subquery Unnesting
+- Query Transformation
+- Materialization
+- Parallel Query Execution
+- Adaptive Query Optimization
+
+==================================================
+5. QUERY EXECUTION & JOIN ALGORITHMS
+==================================================
+- Table Scan
+- Full Table Scan
+- Index Scan
+- Index Range Scan
+- Sequential Scan
+- Nested Loop Join
+- Hash Join
+- Merge Join
+- Sort Merge Join
+- Semi Join
+- Anti Join
+- Bitmap Heap Scan
+- Bitmap Index Scan
+- Sort Operations
+- Hash Aggregation
+- Group Aggregation
+- Parallel Execution
+- Query Plan Operators
+
+==================================================
+6. TRANSACTION MANAGEMENT
+==================================================
+- Transaction Lifecycle
+- ACID Properties
+- Atomicity
+- Consistency
+- Isolation
+- Durability
+- Commit
+- Rollback
+- Savepoints
+- Autocommit
+- Transaction Boundaries
+- Distributed Transactions
+- Two-Phase Commit (2PC)
+- Transaction Logs
+- Transaction Recovery
+
+==================================================
+7. CONCURRENCY CONTROL
+==================================================
+- Concurrency Management
+- Pessimistic Locking
+- Optimistic Locking
+- Shared Locks
+- Exclusive Locks
+- Row-Level Locks
+- Table-Level Locks
+- Page-Level Locks
+- Intent Locks
+- Predicate Locks
+- Lock Escalation
+- Lock Compatibility Matrix
+- Blocking
+- Deadlocks
+- Deadlock Detection
+- Deadlock Prevention
+- Latches vs Locks
+- Spinlocks
+- Lightweight Locks
+
+==================================================
+8. ISOLATION LEVELS & MVCC
+==================================================
+- Read Uncommitted
+- Read Committed
+- Repeatable Read
+- Serializable
+- Snapshot Isolation
+- Multi-Version Concurrency Control (MVCC)
+- Dirty Read
+- Non-Repeatable Read
+- Phantom Read
+- Lost Update
+- Write Skew
+- Serialization Anomalies
+- Optimistic Concurrency Control
+
+==================================================
+9. LOGGING & RECOVERY
+==================================================
+- Write-Ahead Logging (WAL)
+- Redo Logs
+- Undo Logs
+- Transaction Logs
+- Binary Logs
+- Checkpoints
+- Crash Recovery
+- Instance Recovery
+- Media Recovery
+- Point-in-Time Recovery (PITR)
+- Log Sequence Number (LSN)
+- Log Shipping
+- Recovery Models
+- Commit Durability
+- Group Commit
+- Fuzzy Checkpoints
+- Archive Logs
+
+==================================================
+10. MEMORY MANAGEMENT
+==================================================
+- Buffer Pool
+- Buffer Cache
+- Shared Buffers
+- Database Cache
+- Query Plan Cache
+- Library Cache
+- Shared Pool
+- PGA
+- SGA
+- Work Memory
+- Sort Memory
+- Hash Memory
+- Memory Allocation
+- Cache Eviction
+- LRU
+- Page Replacement
+- Buffer Cache Hit Ratio
+- Memory Pressure
+
+==================================================
+11. PARTITIONING & SHARDING
+==================================================
+- Table Partitioning
+- Range Partitioning
+- List Partitioning
+- Hash Partitioning
+- Composite Partitioning
+- Partition Pruning
+- Partition-wise Joins
+- Partition Maintenance
+- Horizontal Partitioning
+- Vertical Partitioning
+- Database Sharding
+- Shard Keys
+- Shard Rebalancing
+- Consistent Hashing
+- Cross-Shard Queries
+- Distributed Query Processing
+
+==================================================
+12. REPLICATION & HIGH AVAILABILITY
+==================================================
+- Database Replication
+- Primary-Replica Architecture
+- Master-Slave Replication
+- Synchronous Replication
+- Asynchronous Replication
+- Semi-Synchronous Replication
+- Physical Replication
+- Logical Replication
+- Streaming Replication
+- Read Replicas
+- Replication Lag
+- Failover
+- Switchover
+- Automatic Failover
+- High Availability (HA)
+- Disaster Recovery (DR)
+- RPO
+- RTO
+- Quorum
+- Split-Brain Problem
+
+==================================================
+13. DATABASE STATISTICS & MONITORING
+==================================================
+- Database Statistics
+- Table Statistics
+- Index Statistics
+- Histograms
+- Cardinality
+- Selectivity
+- Buffer Cache Hit Ratio
+- I/O Statistics
+- CPU Utilization
+- Memory Utilization
+- Wait Events
+- Lock Monitoring
+- Slow Query Monitoring
+- Connection Monitoring
+- Query Performance Monitoring
+- Database Health Checks
+
+==================================================
+14. BACKUP & RESTORE
+==================================================
+- Full Backup
+- Incremental Backup
+- Differential Backup
+- Physical Backup
+- Logical Backup
+- Hot Backup
+- Cold Backup
+- Online Backup
+- Offline Backup
+- Snapshot Backup
+- Backup Compression
+- Backup Encryption
+- Restore Strategies
+- Point-in-Time Recovery
+- Recovery Testing
+- Backup Retention
+- Disaster Recovery Planning
+
+==================================================
+15. DATABASE SECURITY INTERNALS
+==================================================
+- Authentication
+- Authorization
+- Role-Based Access Control (RBAC)
+- Privileges
+- Database Roles
+- Row-Level Security (RLS)
+- Column-Level Security
+- Data Masking
+- Transparent Data Encryption (TDE)
+- Encryption at Rest
+- Encryption in Transit
+- TLS/SSL
+- Auditing
+- SQL Injection
+- Least Privilege
+- Secrets Management
+
+==================================================
+16. ADVANCED DATABASE CONCEPTS
+==================================================
+- Distributed Databases
+- CAP Theorem
+- ACID vs BASE
+- Strong Consistency
+- Eventual Consistency
+- Linearizability
+- Consensus Algorithms
+- Raft
+- Paxos
+- Distributed Transactions
+- Event Sourcing
+- Change Data Capture (CDC)
+- Database Internals for Cloud-Native Systems
+- NewSQL Databases
+- HTAP
+- OLTP vs OLAP
+- Vectorized Query Execution
+- Columnar Database Internals
+
+==================================================
+17. DATABASE PERFORMANCE ENGINEERING
+==================================================
+- Query Profiling
+- SQL Tuning
+- Index Tuning
+- Execution Plan Optimization
+- I/O Optimization
+- CPU Optimization
+- Memory Optimization
+- Lock Contention Analysis
+- Deadlock Troubleshooting
+- Slow Query Analysis
+- Connection Pool Tuning
+- Parallel Query Tuning
+- Table Bloat
+- Index Bloat
+- Vacuum Optimization
+- Database Benchmarking
+- Load Testing
+- Performance Regression Analysis
+
+==================================================
+18. DATABASE-SPECIFIC INTERNALS
+==================================================
+
+ORACLE:
+- SGA / PGA
+- Redo / Undo
+- SCN
+- AWR / ASH / ADDM
+- DBMS_XPLAN
+- RAC
+- Data Guard
+- Automatic Memory Management
+- Tablespaces
+
+POSTGRESQL:
+- Shared Buffers
+- WAL
+- LSN
+- pg_stat_activity
+- EXPLAIN ANALYZE
+- Streaming Replication
+- Logical Replication
+- Autovacuum
+- Tablespaces
+- pg_stat_statements
+
+MYSQL:
+- InnoDB Buffer Pool
+- Redo / Undo
+- LSN
+- Performance Schema
+- EXPLAIN ANALYZE
+- Group Replication
+- Binary Log Replication
+- InnoDB Purge
+- Tablespaces
+- InnoDB Cluster
+
+==================================================
+END OF DATABASE INTERNALS CHECKLIST
+==================================================

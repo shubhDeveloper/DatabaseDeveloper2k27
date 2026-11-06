@@ -1,0 +1,610 @@
+SQL & PROGRAMMING – MASTER CHECKLIST
+========================================
+
+1. SQL FUNDAMENTALS
+-------------------
+[ ] Introduction to DBMS and RDBMS
+[ ] SQL command categories: DDL, DML, DQL, DCL, TCL
+[ ] CREATE, ALTER, DROP, TRUNCATE
+[ ] INSERT, UPDATE, DELETE, MERGE
+[ ] SELECT and DISTINCT
+[ ] WHERE, ORDER BY, GROUP BY, HAVING
+[ ] LIMIT, OFFSET, FETCH FIRST, ROWNUM
+[ ] COMMIT, ROLLBACK, SAVEPOINT
+[ ] GRANT and REVOKE
+[ ] Primary key and foreign key basics
+[ ] NOT NULL, UNIQUE, CHECK, DEFAULT
+[ ] NULL handling
+[ ] Aliases and column expressions
+[ ] Data types and type conversion
+[ ] Constraints and constraint management
+
+2. SQL OPERATORS AND CONDITIONS
+--------------------------------
+[ ] Arithmetic operators
+[ ] Comparison operators
+[ ] Logical operators: AND, OR, NOT
+[ ] IN and NOT IN
+[ ] BETWEEN and NOT BETWEEN
+[ ] LIKE and NOT LIKE
+[ ] IS NULL and IS NOT NULL
+[ ] EXISTS and NOT EXISTS
+[ ] ANY, SOME and ALL
+[ ] CASE WHEN
+[ ] COALESCE
+[ ] NULLIF
+[ ] GREATEST and LEAST
+[ ] Boolean expressions
+[ ] Set operators: UNION, UNION ALL, INTERSECT, MINUS/EXCEPT
+
+3. SQL JOINS
+------------
+[ ] INNER JOIN
+[ ] LEFT OUTER JOIN
+[ ] RIGHT OUTER JOIN
+[ ] FULL OUTER JOIN
+[ ] CROSS JOIN
+[ ] SELF JOIN
+[ ] NATURAL JOIN
+[ ] EQUI JOIN
+[ ] NON-EQUI JOIN
+[ ] THETA JOIN
+[ ] SEMI JOIN
+[ ] ANTI JOIN
+[ ] Joining multiple tables
+[ ] Joining more than three tables
+[ ] Join conditions vs filter conditions
+[ ] JOIN vs subquery
+[ ] JOIN vs EXISTS
+[ ] Handling duplicate rows in joins
+[ ] Handling NULL values in joins
+[ ] Join cardinality and performance
+[ ] Choosing appropriate join strategies
+
+4. SUBQUERIES AND CTE
+--------------------
+[ ] Single-row subqueries
+[ ] Multiple-row subqueries
+[ ] Multiple-column subqueries
+[ ] Scalar subqueries
+[ ] Correlated subqueries
+[ ] Non-correlated subqueries
+[ ] Nested subqueries
+[ ] Subqueries in SELECT, FROM and WHERE
+[ ] EXISTS and NOT EXISTS patterns
+[ ] Subquery with IN and NOT IN
+[ ] Subquery with ANY and ALL
+[ ] Inline views
+[ ] Common Table Expressions (CTE)
+[ ] Multiple CTEs
+[ ] Recursive CTE
+[ ] CTE vs subquery
+[ ] CTE vs temporary table
+[ ] Materialized CTE concepts
+[ ] Subquery unnesting and optimization
+
+5. SQL FUNCTIONS
+----------------
+[ ] Single-row functions
+[ ] Aggregate functions
+[ ] COUNT, SUM, AVG, MIN, MAX
+[ ] String functions: UPPER, LOWER, INITCAP
+[ ] TRIM, LTRIM, RTRIM
+[ ] SUBSTR/SUBSTRING, LENGTH
+[ ] INSTR/POSITION, REPLACE
+[ ] CONCAT, LPAD, RPAD
+[ ] REVERSE
+[ ] Numeric functions: ROUND, TRUNC, CEIL, FLOOR, MOD, ABS
+[ ] Date functions
+[ ] Date arithmetic
+[ ] Date formatting and conversion
+[ ] TO_CHAR, TO_DATE, TO_NUMBER
+[ ] CAST and CONVERT
+[ ] NULL-handling functions
+[ ] Conditional functions
+[ ] LISTAGG, STRING_AGG, GROUP_CONCAT
+[ ] Aggregate functions with GROUP BY
+[ ] Conditional aggregation
+[ ] User-defined functions
+
+6. ADVANCED SQL AND WINDOW FUNCTIONS
+------------------------------------
+[ ] Analytic/window function concepts
+[ ] OVER clause
+[ ] PARTITION BY
+[ ] ORDER BY inside OVER
+[ ] ROWS and RANGE frames
+[ ] GROUPS frames where supported
+[ ] ROW_NUMBER
+[ ] RANK
+[ ] DENSE_RANK
+[ ] NTILE
+[ ] LAG and LEAD
+[ ] FIRST_VALUE and LAST_VALUE
+[ ] NTH_VALUE
+[ ] Running totals
+[ ] Running averages
+[ ] Moving averages
+[ ] Rolling aggregations
+[ ] Cumulative sum and count
+[ ] Top N records per group
+[ ] Finding first and last records
+[ ] Month-over-month calculations
+[ ] Year-over-year calculations
+[ ] Percentage contribution
+[ ] Difference between current and previous row
+[ ] Window functions vs GROUP BY
+[ ] Window frame boundaries
+[ ] Handling ties and NULL values
+
+7. ADVANCED SQL PROBLEM-SOLVING PATTERNS
+----------------------------------------
+[ ] Find duplicate records
+[ ] Delete duplicate records safely
+[ ] Find the second-highest salary
+[ ] Find Nth-highest salary
+[ ] Find top N records per department
+[ ] Find employees earning more than their managers
+[ ] Find employees without managers
+[ ] Find records present in one table but not another
+[ ] Find common records between tables
+[ ] Find missing records
+[ ] Find missing sequence numbers
+[ ] Find gaps and islands
+[ ] Find consecutive dates
+[ ] Find consecutive login days
+[ ] Find latest record per customer
+[ ] Find first and last transaction
+[ ] Find previous and next transaction
+[ ] Find customers with no transactions
+[ ] Find departments with no employees
+[ ] Find running balances
+[ ] Find median and percentile
+[ ] Pivot and unpivot
+[ ] Conditional aggregation
+[ ] Hierarchical queries
+[ ] Recursive data traversal
+[ ] Sessionization
+[ ] Deduplication using ROW_NUMBER
+[ ] Data comparison between two tables
+[ ] SCD Type 1 and Type 2 SQL patterns
+[ ] Data validation and reconciliation queries
+
+8. DATABASE OBJECTS AND SCHEMA DESIGN
+-------------------------------------
+[ ] Tables and schemas
+[ ] Views
+[ ] Materialized views
+[ ] Temporary tables
+[ ] Global and local temporary table concepts
+[ ] Sequences
+[ ] Synonyms (Oracle)
+[ ] Indexes
+[ ] Constraints
+[ ] Primary and foreign keys
+[ ] Candidate and alternate keys
+[ ] Composite keys
+[ ] Natural and surrogate keys
+[ ] One-to-one relationships
+[ ] One-to-many relationships
+[ ] Many-to-many relationships
+[ ] Normalization: 1NF, 2NF, 3NF, BCNF
+[ ] Denormalization
+[ ] Referential integrity
+[ ] Schema design principles
+[ ] Data types and column selection
+[ ] Default values and generated columns
+
+9. ORACLE SQL AND PL/SQL
+------------------------
+ORACLE SQL
+[ ] Oracle SQL syntax and data types
+[ ] DUAL table
+[ ] ROWNUM and ROWID
+[ ] Hierarchical queries: CONNECT BY, START WITH
+[ ] PRIOR, LEVEL, SYS_CONNECT_BY_PATH
+[ ] PIVOT and UNPIVOT
+[ ] MERGE statement
+[ ] Oracle date and timestamp functions
+[ ] Oracle-specific string and numeric functions
+[ ] REGEXP_LIKE, REGEXP_REPLACE, REGEXP_SUBSTR
+[ ] LISTAGG
+[ ] Analytical functions
+[ ] Sequences and NEXTVAL/CURRVAL
+[ ] Synonyms
+[ ] Database links
+[ ] External tables
+[ ] Flashback Query basics
+[ ] DBMS_METADATA basics
+
+PL/SQL FUNDAMENTALS
+[ ] PL/SQL architecture
+[ ] Anonymous blocks
+[ ] DECLARE, BEGIN, EXCEPTION, END
+[ ] Variables and constants
+[ ] Scalar and composite data types
+[ ] %TYPE and %ROWTYPE
+[ ] IF, ELSIF and ELSE
+[ ] CASE statements
+[ ] Simple, WHILE and FOR loops
+[ ] Nested loops
+[ ] EXIT and CONTINUE
+[ ] NULL statement
+[ ] Scope and variable visibility
+
+CURSORS AND COLLECTIONS
+[ ] Implicit cursors
+[ ] Explicit cursors
+[ ] Cursor attributes: %FOUND, %NOTFOUND, %ROWCOUNT, %ISOPEN
+[ ] Cursor FOR loops
+[ ] Parameterized cursors
+[ ] REF CURSOR
+[ ] Strong and weak REF CURSOR
+[ ] Cursor variables
+[ ] Records
+[ ] Associative arrays
+[ ] Nested tables
+[ ] VARRAY
+[ ] Collections methods
+[ ] BULK COLLECT
+[ ] FORALL
+[ ] LIMIT with BULK COLLECT
+
+PROCEDURES, FUNCTIONS AND PACKAGES
+[ ] Stored procedures
+[ ] Stored functions
+[ ] IN, OUT and IN OUT parameters
+[ ] Return values
+[ ] Procedure vs function
+[ ] Packages and package specification
+[ ] Package body
+[ ] Package variables and initialization
+[ ] Overloading
+[ ] Dependencies and invalid objects
+[ ] Recompiling PL/SQL objects
+
+EXCEPTION HANDLING AND ADVANCED PL/SQL
+[ ] Predefined exceptions
+[ ] User-defined exceptions
+[ ] PRAGMA EXCEPTION_INIT
+[ ] RAISE and RAISE_APPLICATION_ERROR
+[ ] Exception propagation
+[ ] SQLCODE and SQLERRM
+[ ] Dynamic SQL
+[ ] EXECUTE IMMEDIATE
+[ ] DBMS_SQL basics
+[ ] Native dynamic SQL
+[ ] Triggers: BEFORE, AFTER, INSTEAD OF
+[ ] Row-level and statement-level triggers
+[ ] Compound triggers
+[ ] Mutating table error
+[ ] Autonomous transactions
+[ ] PRAGMA AUTONOMOUS_TRANSACTION
+[ ] Transaction management in PL/SQL
+[ ] DBMS_OUTPUT
+[ ] DBMS_SCHEDULER
+[ ] DBMS_JOB
+[ ] DBMS_CRYPTO
+[ ] UTL_FILE
+[ ] Performance optimization in PL/SQL
+[ ] Bulk processing and context switching
+[ ] SQL injection prevention in dynamic SQL
+
+10. POSTGRESQL SQL AND PL/pgSQL
+-------------------------------
+POSTGRESQL SQL
+[ ] PostgreSQL architecture basics
+[ ] PostgreSQL data types
+[ ] SERIAL and IDENTITY columns
+[ ] UUID data type
+[ ] JSON and JSONB
+[ ] Arrays and composite types
+[ ] ENUM types
+[ ] Range types
+[ ] Domains
+[ ] RETURNING clause
+[ ] INSERT ON CONFLICT (UPSERT)
+[ ] DISTINCT ON
+[ ] FILTER clause
+[ ] LATERAL joins
+[ ] Generate_series()
+[ ] Recursive CTE
+[ ] Window functions
+[ ] Full-text search basics
+[ ] Regular expressions
+[ ] PostgreSQL date/time functions
+[ ] String and array functions
+[ ] JSON/JSONB operators and functions
+[ ] PostgreSQL extensions
+[ ] Schemas and search_path
+[ ] Views and materialized views
+[ ] Temporary and unlogged tables
+[ ] Sequences and identity columns
+
+PL/pgSQL FUNDAMENTALS
+[ ] PL/pgSQL block structure
+[ ] DO blocks
+[ ] Variables and constants
+[ ] Data types and declarations
+[ ] RECORD and ROW types
+[ ] %TYPE and %ROWTYPE
+[ ] IF, CASE and conditional logic
+[ ] LOOP, WHILE and FOR
+[ ] FOREACH loops
+[ ] EXIT and CONTINUE
+[ ] Cursors and cursor variables
+[ ] FOR loops over query results
+[ ] Arrays and composite types
+[ ] Exception handling
+[ ] RAISE and RAISE EXCEPTION
+[ ] GET DIAGNOSTICS
+[ ] Stored functions
+[ ] Stored procedures
+[ ] IN, OUT, INOUT and VARIADIC parameters
+[ ] RETURNS TABLE
+[ ] RETURN QUERY
+[ ] RETURN NEXT
+[ ] Function volatility: IMMUTABLE, STABLE, VOLATILE
+[ ] SECURITY INVOKER and SECURITY DEFINER
+[ ] Dynamic SQL using EXECUTE and USING
+[ ] Triggers and trigger functions
+[ ] BEFORE, AFTER and INSTEAD OF triggers
+[ ] Statement-level and row-level triggers
+[ ] Event triggers
+[ ] Transaction handling and exception blocks
+[ ] Extensions: pgcrypto, pg_stat_statements
+[ ] pg_cron basics
+[ ] Bulk processing patterns
+[ ] PL/pgSQL performance optimization
+[ ] SQL injection prevention
+
+11. MYSQL SQL AND STORED PROGRAMMING
+------------------------------------
+MYSQL SQL
+[ ] MySQL architecture basics
+[ ] MySQL data types
+[ ] Storage engines: InnoDB and MyISAM
+[ ] AUTO_INCREMENT
+[ ] JSON data type and functions
+[ ] ENUM and SET data types
+[ ] Date/time functions
+[ ] String and numeric functions
+[ ] Regular expressions
+[ ] LIMIT and OFFSET
+[ ] LIMIT with pagination
+[ ] INSERT ON DUPLICATE KEY UPDATE
+[ ] REPLACE INTO
+[ ] ON UPDATE CURRENT_TIMESTAMP
+[ ] Common Table Expressions
+[ ] Recursive CTE
+[ ] Window functions
+[ ] JSON_TABLE
+[ ] GROUP_CONCAT
+[ ] Views
+[ ] Temporary tables
+[ ] Generated columns
+[ ] Information Schema
+[ ] Performance Schema basics
+
+MYSQL STORED PROGRAMMING
+[ ] Stored procedures
+[ ] Stored functions
+[ ] DELIMITER
+[ ] Variables and declarations
+[ ] User-defined variables
+[ ] IN, OUT and INOUT parameters
+[ ] IF, ELSEIF and ELSE
+[ ] CASE statements
+[ ] LOOP, WHILE and REPEAT
+[ ] LEAVE and ITERATE
+[ ] Cursors
+[ ] Cursor declaration and handling
+[ ] DECLARE HANDLER
+[ ] CONTINUE and EXIT handlers
+[ ] SIGNAL and RESIGNAL
+[ ] Exception/error handling
+[ ] Triggers: BEFORE and AFTER
+[ ] Row-level triggers
+[ ] Dynamic SQL
+[ ] PREPARE, EXECUTE and DEALLOCATE PREPARE
+[ ] Transactions in stored programs
+[ ] Temporary tables in procedures
+[ ] JSON processing in stored programs
+[ ] Procedure security and DEFINER
+[ ] Stored program debugging
+[ ] Stored program performance optimization
+[ ] SQL injection prevention
+
+12. PYTHON PROGRAMMING
+----------------------
+PYTHON FUNDAMENTALS
+[ ] Python installation and environment setup
+[ ] Variables and naming conventions
+[ ] Data types
+[ ] Type conversion
+[ ] Mutable vs immutable objects
+[ ] Operators
+[ ] Conditional statements
+[ ] For and while loops
+[ ] Break, continue and pass
+[ ] Strings and string methods
+[ ] Lists and list methods
+[ ] Tuples
+[ ] Sets
+[ ] Dictionaries
+[ ] List, set and dictionary comprehensions
+[ ] Functions and parameters
+[ ] Positional and keyword arguments
+[ ] Default arguments
+[ ] *args and **kwargs
+[ ] Lambda functions
+[ ] Map, filter and reduce
+[ ] Scope: local, global and nonlocal
+[ ] Modules and packages
+[ ] Import system
+[ ] Virtual environments
+[ ] pip and dependency management
+
+OBJECT-ORIENTED PROGRAMMING
+[ ] Classes and objects
+[ ] Constructors: __init__
+[ ] Instance, class and static methods
+[ ] Instance and class variables
+[ ] Encapsulation
+[ ] Inheritance
+[ ] Multiple inheritance
+[ ] Polymorphism
+[ ] Abstraction
+[ ] Method overriding
+[ ] Method overloading concepts
+[ ] super()
+[ ] Magic/dunder methods
+[ ] Properties and decorators
+[ ] Abstract base classes
+[ ] Dataclasses
+
+ADVANCED PYTHON
+[ ] Iterators and iterables
+[ ] Generators and yield
+[ ] Generator expressions
+[ ] Decorators
+[ ] Closures
+[ ] Context managers
+[ ] with statement
+[ ] Exception handling
+[ ] Custom exceptions
+[ ] File handling
+[ ] Text, CSV and JSON files
+[ ] Pickle basics and security considerations
+[ ] Regular expressions
+[ ] Date and time handling
+[ ] Collections module
+[ ] itertools
+[ ] functools
+[ ] pathlib and os
+[ ] Logging
+[ ] Type hints
+[ ] Pydantic basics
+[ ] Memory management
+[ ] Garbage collection
+[ ] Shallow copy vs deep copy
+[ ] Threading
+[ ] Multiprocessing
+[ ] Asyncio and async/await
+[ ] GIL concepts
+[ ] Unit testing
+[ ] pytest
+[ ] Mocking
+[ ] Debugging and profiling
+[ ] Performance optimization
+
+13. PYTHON FOR DATABASE DEVELOPMENT
+-----------------------------------
+[ ] Python DB-API 2.0
+[ ] Database connectivity concepts
+[ ] Oracle connectivity using python-oracledb
+[ ] PostgreSQL connectivity using psycopg / psycopg2
+[ ] MySQL connectivity using mysql-connector-python
+[ ] MySQL connectivity using PyMySQL
+[ ] SQLAlchemy Core
+[ ] SQLAlchemy ORM
+[ ] Connection and cursor management
+[ ] Connection pooling
+[ ] Parameterized queries
+[ ] Preventing SQL injection
+[ ] Executing SELECT queries
+[ ] INSERT, UPDATE and DELETE operations
+[ ] Executing stored procedures
+[ ] Executing stored functions
+[ ] Handling output parameters
+[ ] Transaction management
+[ ] Commit and rollback
+[ ] Bulk insert and batch processing
+[ ] executemany()
+[ ] Fetching large datasets
+[ ] Streaming database results
+[ ] Pagination
+[ ] Connection timeout and query timeout
+[ ] Retry and error handling
+[ ] Deadlock handling
+[ ] Logging database operations
+[ ] Database configuration and secrets management
+[ ] Environment variables
+[ ] Database migrations
+[ ] Data validation and reconciliation
+[ ] Testing database code
+[ ] ETL scripts using Python and databases
+
+14. SQL PERFORMANCE AND PRODUCTION CODING
+-----------------------------------------
+[ ] Query execution plan analysis
+[ ] EXPLAIN and EXPLAIN ANALYZE
+[ ] Index selection and optimization
+[ ] Join optimization
+[ ] Subquery and CTE optimization
+[ ] Avoiding unnecessary SELECT *
+[ ] SARGable query design
+[ ] Predicate and projection pushdown
+[ ] Partition pruning
+[ ] Avoiding implicit data type conversions
+[ ] Bind variables and prepared statements
+[ ] Dynamic SQL security
+[ ] Bulk operations and batch processing
+[ ] Pagination and keyset pagination
+[ ] Transaction scope management
+[ ] Deadlock-aware application design
+[ ] Error handling and exception logging
+[ ] Idempotent SQL operations
+[ ] Data validation and reconciliation
+[ ] Audit columns and audit logging
+[ ] Code review standards
+[ ] SQL version control
+[ ] Unit and integration testing
+[ ] Deployment scripts
+[ ] Rollback scripts
+[ ] Database migration best practices
+[ ] Production troubleshooting
+[ ] Query monitoring and tuning
+
+15. PRACTICAL PROJECTS AND HANDS-ON PRACTICE
+-------------------------------------------
+[ ] Design an employee and department database
+[ ] Write 100 basic SQL queries
+[ ] Solve 100 intermediate SQL problems
+[ ] Solve 100 advanced SQL problems
+[ ] Build complex joins across multiple tables
+[ ] Build analytical reports using window functions
+[ ] Create stored procedures in Oracle
+[ ] Create packages and triggers in Oracle
+[ ] Build a PL/SQL bulk processing project
+[ ] Create functions and procedures in PostgreSQL
+[ ] Build PostgreSQL trigger-based auditing
+[ ] Build a PostgreSQL JSONB project
+[ ] Create MySQL stored procedures and triggers
+[ ] Build a Python database CRUD application
+[ ] Build a Python ETL pipeline using a database
+[ ] Build a database reconciliation tool in Python
+[ ] Build a bulk data loading application
+[ ] Build a database migration utility
+[ ] Compare query performance across Oracle, PostgreSQL and MySQL
+[ ] Document projects with Git and README files
+
+RECOMMENDED LEARNING ORDER
+--------------------------
+[ ] 1. SQL Fundamentals
+[ ] 2. SQL Operators, Joins and Subqueries
+[ ] 3. SQL Functions and CTEs
+[ ] 4. Window Functions
+[ ] 5. Advanced SQL Problem-Solving
+[ ] 6. Database Objects and Schema Design
+[ ] 7. Oracle SQL and PL/SQL
+[ ] 8. PostgreSQL SQL and PL/pgSQL
+[ ] 9. MySQL SQL and Stored Programming
+[ ] 10. Python Fundamentals
+[ ] 11. Advanced Python and OOP
+[ ] 12. Python Database Connectivity
+[ ] 13. SQL Performance and Production Coding
+[ ] 14. Hands-on Projects and Interview Practice
+
+END OF CHECKLIST
+========================================

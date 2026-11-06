@@ -1,0 +1,926 @@
+==========================================================================
+ SQL & PL/SQL INTERVIEW Q&A - 100 QUESTIONS FOR 6+ YEARS EXPERIENCE
+ (Oracle-focused; Senior Database Developer level)
+==========================================================================
+
+HOW TO USE THIS DOCUMENT
+- Each answer has the concept, plus a "REAL-WORLD" line you can adapt to your own
+  project experience. Interviewers at 6+ years want trade-offs, failure
+  cases and numbers, not definitions. Replace the sample numbers with yours.
+- Sections:
+  A. Advanced SQL (Q1-25)
+  B. Performance Tuning & Optimizer (Q26-47)
+  C. PL/SQL Advanced (Q48-80)
+  D. Transactions, Locking, Concurrency (Q81-90)
+  E. Design, Architecture & Experience (Q91-100)
+
+==========================================================================
+ SECTION A: ADVANCED SQL
+==========================================================================
+
+Q1. Difference between ROW_NUMBER, RANK and DENSE_RANK? Where have you used each?
+A1. ROW_NUMBER gives a unique sequence even for ties. RANK leaves gaps after
+ties (1,1,3). DENSE_RANK has no gaps (1,1,2).
+  - Dedup: ROW_NUMBER() OVER (PARTITION BY key ORDER BY load_ts DESC) = 1
+  - "Top 3 salaries including ties": DENSE_RANK <= 3
+REAL-WORLD: I used ROW_NUMBER to pick the latest record per business key in
+a 200M-row staging table, instead of a self-join with MAX(), which cut run
+time significantly because it needed a single pass.
+
+Q2. Explain window frames: ROWS vs RANGE. Give a running total example.
+A2. ROWS counts physical rows; RANGE groups rows with equal ORDER BY values
+(logical). Default frame with ORDER BY is RANGE UNBOUNDED PRECEDING TO CURRENT
+ROW, which treats ties together and is slower than ROWS.
+  SUM(amt) OVER (PARTITION BY acct ORDER BY txn_dt, txn_id
+                 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+REAL-WORLD: Explicit ROWS + a unique tiebreaker column gives deterministic
+running balances; the default RANGE gave wrong-looking balances for
+same-timestamp transactions in a ledger report.
+
+Q3. How do you solve "gaps and islands" problems?
+A3. Use the row-number-difference technique:
+  SELECT MIN(d) start_d, MAX(d) end_d
+  FROM (SELECT d, d - ROW_NUMBER() OVER (ORDER BY d) grp FROM t)
+  GROUP BY grp;
+Consecutive values share the same grp. LAG/LEAD can also detect gaps
+(next_value - value > 1).
+REAL-WORLD: Used for finding continuous employee coverage periods and missing
+batch-date sequences in a data warehouse load audit.
+
+Q4. Hierarchical queries: CONNECT BY vs recursive CTE. Which do you prefer?
+A4. CONNECT BY is Oracle-specific, with LEVEL, PRIOR, SYS_CONNECT_BY_PATH,
+CONNECT_BY_ISLEAF, CONNECT_BY_ROOT and NOCYCLE. Recursive WITH (11gR2+) is
+ANSI, portable, and supports CYCLE clause and SEARCH DEPTH/BREADTH FIRST.
+I use recursive CTE for portable code and complex joins, CONNECT BY for quick
+Oracle-only tree work.
+REAL-WORLD: For BOM (bill of materials) explosion, I used a recursive CTE
+with a CYCLE clause to protect against bad data creating infinite loops.
+
+Q5. Explain MERGE. What are its common pitfalls?
+A5. MERGE does upsert in one statement (WHEN MATCHED UPDATE / WHEN NOT
+MATCHED INSERT, optional DELETE WHERE inside matched branch).
+Pitfalls:
+  - ORA-30926: source returns multiple rows for one target row; dedupe the
+    source first.
+  - You cannot update columns used in the ON clause.
+  - Trigger/row-level behavior and performance with huge sources; make sure
+    the join column is indexed or use hash join.
+REAL-WORLD: I replaced a row-by-row "try update, if no rows then insert"
+loop with MERGE + FORALL staging, reducing a 3-hour load to ~10 minutes.
+
+Q6. IN vs EXISTS vs JOIN. What is the NOT IN NULL trap?
+A6. The optimizer often transforms IN/EXISTS to semi-joins, so performance is
+usually equal on modern versions. Semantic difference matters with NOT IN:
+if the subquery returns even one NULL, NOT IN returns no rows (three-valued
+logic). NOT EXISTS is NULL-safe. Use NOT EXISTS or anti-join.
+REAL-WORLD: A "missing customers" report returned zero rows in production
+because one NULL customer_id existed in the subquery. Switching to NOT
+EXISTS fixed it, and I added NOT NULL constraints upstream.
+
+Q7. How do you delete duplicate rows from a huge table safely?
+A7. Options:
+  1) DELETE WHERE ROWID IN (SELECT rid FROM (SELECT ROWID rid, ROW_NUMBER()
+     OVER (PARTITION BY k ORDER BY ROWID) rn FROM t) WHERE rn > 1)
+  2) For very large deletes: CTAS the distinct rows into a new table,
+     recreate indexes/constraints/grants, swap names (or EXCHANGE PARTITION).
+  Then add a unique constraint so it never happens again.
+REAL-WORLD: For a 500M-row table deleting 30% duplicates, CTAS + rename was
+faster and generated far less redo/undo than DELETE.
+
+Q8. Top-N per group - what are your options?
+A8. (a) ROW_NUMBER()/RANK() in an inline view, filter on rank. (b) 12c+
+CROSS APPLY / LATERAL with FETCH FIRST n ROWS ONLY per group - great when
+the group count is small and there is an index. (c) Aggregate KEEP
+(DENSE_RANK FIRST ORDER BY ...) for top-1 values without a subquery.
+REAL-WORLD: For "last 3 orders per customer" for 50K customers, LATERAL with
+an index on (customer_id, order_dt DESC) avoided sorting the whole table.
+
+Q9. PIVOT and UNPIVOT - when and limitations?
+A9. PIVOT converts rows to columns using aggregate; UNPIVOT does the reverse.
+Limitation: column list must be static in plain SQL (dynamic needs dynamic
+SQL or PIVOT XML). UNPIVOT EXCLUDE/INCLUDE NULLS controls null rows.
+REAL-WORLD: I generated dynamic pivot SQL in PL/SQL using LISTAGG over the
+distinct month list for a reporting layer, validated with DBMS_ASSERT.
+
+Q10. LISTAGG limits and how do you handle them?
+A10. Result is limited to VARCHAR2 max (4000 or 32767 with extended). Error
+ORA-01489 on overflow. 12.2+: LISTAGG(col, ',' ON OVERFLOW TRUNCATE '...'
+WITH COUNT). Before that, use XMLAGG with CLOB or a custom aggregate.
+REAL-WORLD: Used ON OVERFLOW TRUNCATE for audit descriptions so nightly jobs
+stopped failing on unusually large groups.
+
+Q11. How does NULL behave across SQL features?
+A11. - Comparisons with NULL yield UNKNOWN; use IS NULL.
+  - Aggregates ignore NULLs (except COUNT(*)); AVG ignores them in both
+    numerator and denominator.
+  - Oracle treats empty string as NULL (unlike PostgreSQL/SQL Server).
+  - B-tree indexes do not store rows where ALL indexed columns are NULL,
+    so WHERE col IS NULL cannot use a single-column index. Add a constant
+    column to composite index or use a function-based index.
+  - Unique constraints allow multiple rows with NULL on single column.
+  - COALESCE short-circuits and accepts many args; NVL evaluates both.
+REAL-WORLD: Migrating Oracle to PostgreSQL, the empty-string = NULL
+difference caused logic bugs which I found with a targeted test suite.
+
+Q12. Outer join: condition in ON vs WHERE?
+A12. A filter on the outer-joined table in WHERE turns the LEFT JOIN into an
+inner join (NULL rows get filtered out). Put it in ON to preserve outer rows.
+REAL-WORLD: A report silently dropped customers with no orders after someone
+added WHERE o.status='OPEN'; moving it to ON fixed the totals.
+
+Q13. UNION vs UNION ALL, and set operators performance?
+A13. UNION sorts/hashes to remove duplicates (extra cost). UNION ALL does
+not. Default to UNION ALL unless duplicates are truly possible and unwanted.
+MINUS/INTERSECT also do distinct operations. Many MINUS queries are
+faster as NOT EXISTS, and INTERSECT as EXISTS, with proper indexes.
+REAL-WORLD: Replacing UNION with UNION ALL where inputs were disjoint
+partitions removed a large sort step in an ETL view.
+
+Q14. How does the WITH clause (CTE) behave? Does it materialize?
+A14. Oracle may inline it or materialize into a temp table when referenced
+more than once (and the optimizer decides). Hints: /*+ MATERIALIZE */ and
+/*+ INLINE */. Materialization helps when an expensive subquery is reused;
+inlining helps when predicates can be pushed down.
+REAL-WORLD: I forced MATERIALIZE on an expensive aggregation reused three
+times in a report, cutting repeated full scans.
+
+Q15. What are LATERAL / CROSS APPLY / OUTER APPLY used for?
+A15. They let a right-side inline view reference columns from the left row
+(12c+). Useful for top-N per row, calling table functions per row, and
+JSON_TABLE per row. OUTER APPLY keeps left rows with no match.
+REAL-WORLD: Used with JSON_TABLE to flatten nested JSON arrays per order row
+in an API-driven integration.
+
+Q16. What is multi-table INSERT (INSERT ALL / INSERT FIRST)?
+A16. One scan of the source feeds several target tables, optionally with
+WHEN conditions. INSERT ALL evaluates all conditions; INSERT FIRST stops at
+the first true condition. Efficient for splitting a staging table into
+valid / reject / history tables in one pass.
+REAL-WORLD: Used INSERT FIRST to route rows into good/quarantine tables
+based on validation flags without scanning staging multiple times.
+
+Q17. Explain Flashback Query and Flashback Table. When did you use them?
+A17. SELECT ... AS OF TIMESTAMP/SCN reads data as it was, based on undo
+(limited by UNDO_RETENTION). Flashback Table restores a table (needs row
+movement enabled). Flashback Version Query shows row versions between two
+points; Flashback Data Archive keeps history long-term.
+REAL-WORLD: After an accidental UPDATE without WHERE, I recovered rows
+using AS OF TIMESTAMP and a MERGE back into the table, no restore needed.
+
+Q18. What is MATCH_RECOGNIZE? Give a use case.
+A18. 12c row pattern matching: regex-like patterns across ordered rows
+(PARTITION BY, ORDER BY, MEASURES, PATTERN, DEFINE). Use cases: detecting
+V-shaped price patterns, consecutive failed logins, session identification.
+REAL-WORLD: Detected "3 or more failed payments followed by success" in
+fraud analysis; it replaced a messy multi-level LAG query.
+
+Q19. How do you work with JSON inside Oracle SQL?
+A19. JSON_VALUE (scalar), JSON_QUERY (fragment), JSON_TABLE (relational
+projection), JSON_EXISTS, JSON_OBJECT/JSON_ARRAYAGG to generate. Use IS JSON
+check constraint, and a JSON search index or function-based indexes on
+JSON_VALUE for performance. 21c adds native JSON type.
+REAL-WORLD: Stored third-party payloads as JSON in a CLOB with IS JSON
+constraint and exposed relational views via JSON_TABLE for reporting.
+
+Q20. How do you generate a continuous date series, and handle business days?
+A20. SELECT start_dt + LEVEL - 1 FROM dual CONNECT BY LEVEL <= end-start+1;
+or recursive CTE. For business days, join to a calendar dimension table
+(best practice: holiday flags, fiscal periods) instead of date arithmetic
+with hard-coded weekends.
+REAL-WORLD: Built a calendar dimension with fiscal periods and holiday flags
+that simplified dozens of date-logic queries across reports.
+
+Q21. Regular expression functions in Oracle?
+A21. REGEXP_LIKE, REGEXP_SUBSTR, REGEXP_REPLACE, REGEXP_INSTR, REGEXP_COUNT.
+Useful for validation and parsing but they cannot use normal indexes and are
+CPU-heavy; for large tables filter first with cheaper predicates or use a
+function-based index.
+REAL-WORLD: Used REGEXP_SUBSTR to split delimited legacy fields into rows
+(with CONNECT BY LEVEL) during a data migration.
+
+Q22. Virtual columns, identity columns, invisible columns - practical uses?
+A22. Virtual column: computed on read, can be indexed/partitioned on, helps
+avoid function on column in WHERE. Identity (12c): GENERATED ALWAYS / BY
+DEFAULT AS IDENTITY replaces sequence+trigger. Invisible columns: hidden from
+SELECT * and INSERT without column list, useful for backward-compatible
+schema changes.
+REAL-WORLD: Added an invisible column during a rolling release so old app
+versions kept working while new code populated it.
+
+Q23. DML error logging and RETURNING clause?
+A23. DBMS_ERRLOG.CREATE_ERROR_LOG + "LOG ERRORS INTO err$_t REJECT LIMIT
+UNLIMITED" lets a bulk DML continue past bad rows, recording them. RETURNING
+INTO gets values changed (e.g., generated IDs) without a second query, and
+works with bulk binds (RETURNING BULK COLLECT INTO).
+REAL-WORLD: Used error logging in a 10M-row load so 200 bad rows no longer
+rolled back the entire batch.
+
+Q24. What are analytic vs aggregate functions? Give a ratio example.
+A24. Aggregates collapse rows; analytic functions return a value per row
+while looking at a window. Example: percent of department total:
+  salary / SUM(salary) OVER (PARTITION BY dept_id)
+Also RATIO_TO_REPORT, NTILE, PERCENT_RANK, FIRST_VALUE/LAST_VALUE (watch the
+default frame; use ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING).
+REAL-WORLD: LAST_VALUE returned wrong results until I set the full frame; a
+classic bug I now check in code reviews.
+
+Q25. How do you do pagination correctly?
+A25. 12c: ORDER BY id OFFSET n ROWS FETCH NEXT m ROWS ONLY. For deep pages,
+OFFSET is slow (it still reads skipped rows); use keyset pagination:
+WHERE (sort_col, id) > (:last_sort, :last_id) ORDER BY sort_col, id
+FETCH FIRST m ROWS ONLY, backed by a composite index. ORDER BY must be
+deterministic (add unique tiebreaker).
+REAL-WORLD: Switched an API from OFFSET to keyset pagination; page-500
+latency dropped from seconds to milliseconds.
+
+==========================================================================
+ SECTION B: PERFORMANCE TUNING & OPTIMIZER
+==========================================================================
+
+Q26. How do you read an execution plan? What do you look at first?
+A26. Get the REAL plan, not just EXPLAIN PLAN:
+  SELECT /*+ gather_plan_statistics */ ...;
+  SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY_CURSOR(NULL,NULL,'ALLSTATS LAST'));
+Compare E-Rows (estimated) with A-Rows (actual). Large mismatch = bad
+statistics/cardinality, the root cause of most bad plans. Then check access
+paths, join order/method, Starts, Buffers (logical IO), and predicate section
+(access vs filter predicates).
+REAL-WORLD: A query estimated 10 rows but returned 2M; extended statistics on
+two correlated columns fixed the estimate and the plan flipped to hash join.
+
+Q27. Query was fast yesterday and slow today. How do you investigate?
+A27. 1) Same plan? Compare PLAN_HASH_VALUE in V$SQL / AWR (DBA_HIST_SQLSTAT).
+2) Statistics changed/stale, new histograms? 3) Bind peeking with different
+values? 4) Data volume growth, partition added? 5) Concurrency/locks/IO
+waits (ASH)? 6) Parameter/patch change? Restore a good plan via SQL Plan
+Baseline while root cause is fixed.
+REAL-WORLD: Month-end skew made bind peeking choose a nested-loop plan for
+a huge bind value; adaptive cursor sharing + histogram resolved it.
+
+Q28. Types of indexes and when to use each?
+A28. - B-tree: default, high-cardinality, OLTP.
+  - Bitmap: low cardinality, DW/read-mostly; bad for concurrent DML (locks
+    many rows).
+  - Function-based: for UPPER(name), TRUNC(date), virtual column alternative.
+  - Composite: column order matters (equality columns first, then range).
+  - Reverse key: reduces right-hand block contention on sequences (but kills
+    range scans).
+  - Index-organized table: data stored in the PK index; great for lookup
+    tables accessed by PK.
+  - Local/global partitioned indexes.
+REAL-WORLD: Replaced several single-column indexes with one composite index
+matching the main access pattern, improving DML speed and plan stability.
+
+Q29. Composite index: how to choose column order? What is skip scan?
+A29. Put columns used with equality first, range last; consider selectivity
+and whether leading columns are always present in queries. Index skip scan
+lets Oracle use an index when the leading column is omitted, but only
+efficient when that leading column has very few distinct values.
+REAL-WORLD: Tuned (status, customer_id, created_dt) vs (customer_id,
+created_dt, status) by checking actual query predicates via AWR SQL.
+
+Q30. Index exists but is not used. Why?
+A30. - Function/implicit conversion on the column (TO_CHAR(col), VARCHAR2
+    compared to NUMBER).
+  - Leading column missing; low selectivity so full scan is cheaper.
+  - Stale/missing stats; NULL-only issue (IS NULL on nullable single col).
+  - LIKE '%abc' leading wildcard.
+  - Data type mismatch/NLS settings; different datatype in bind.
+  - Index invisible/unusable; optimizer_index_cost_adj settings.
+REAL-WORLD: A numeric-looking VARCHAR2 column compared to a NUMBER bind
+caused implicit TO_NUMBER on the column and a full scan; fixed bind type.
+
+Q31. Explain nested loop, hash join and sort-merge join - when each wins.
+A31. Nested loops: small driving set + indexed lookup on inner side (OLTP).
+Hash join: large unsorted sets, equi-joins; builds hash table on smaller
+input (watch PGA/temp spill). Sort-merge: non-equi joins or already sorted
+inputs. Wrong choice usually traces back to cardinality estimates.
+REAL-WORLD: A report forced into nested loops over 5M rows took 40 minutes;
+a hash join with full scans took 90 seconds after stats fix.
+
+Q32. Bind variables: benefits and the bind peeking problem?
+A32. Binds enable soft parse and cursor sharing, reduce shared pool pressure
+and protect against SQL injection. Downsides: bind peeking creates a plan
+for first value, which can be bad for skewed data. Adaptive Cursor Sharing
+(11g+) can create multiple child cursors for skewed binds.
+REAL-WORLD: Diagnosed using V$SQL_CS_HISTOGRAM and BIND_AWARE columns.
+
+Q33. How do you manage optimizer statistics in production?
+A33. Use DBMS_STATS (not ANALYZE), AUTO_SAMPLE_SIZE, METHOD_OPT with
+SIZE AUTO, incremental stats for partitioned tables, extended stats for
+column groups/expressions, lock stats on volatile staging tables, and
+gather stats immediately after big loads. Preserve history (restore
+via DBMS_STATS.RESTORE_TABLE_STATS) and test in pre-prod using pending stats.
+REAL-WORLD: Made stats gathering part of the ETL job end step for the
+partition just loaded rather than relying only on the nightly window.
+
+Q34. When do you use hints? What are the alternatives?
+A34. Hints are a last resort because they hard-code decisions that go stale.
+Better: fix statistics, add indexes, rewrite SQL. If a plan must be pinned:
+SQL Plan Management (baselines), SQL Profiles, or SQL Patch. Legit hints:
+APPEND, PARALLEL, MATERIALIZE, LEADING/USE_HASH in well-understood batch jobs.
+REAL-WORLD: I used a SQL Plan Baseline to stabilize a critical query after
+an upgrade instead of embedding hints in application code.
+
+Q35. Hard parse vs soft parse. How do you reduce parsing?
+A35. Hard parse: syntax, semantic, optimization - expensive, takes latches
+on library cache. Soft parse reuses cursor. Reduce by using bind variables,
+avoid literal SQL in dynamic SQL, use PL/SQL static SQL (cached cursors),
+SESSION_CACHED_CURSORS. CURSOR_SHARING=FORCE is a band-aid.
+REAL-WORLD: Found a legacy module concatenating literals; AWR showed high
+parse CPU. Rewriting with binds reduced CPU by ~25%.
+
+Q36. How does partition pruning work and how do you verify it?
+A36. Optimizer eliminates partitions based on predicates on the partition key
+(static or dynamic via bind/subquery). Verify in the plan: Pstart/Pstop
+columns (KEY, KEY(I) or specific numbers). Pruning fails when functions wrap
+the partition key or datatypes mismatch.
+REAL-WORLD: A TRUNC(txn_date) predicate prevented pruning; changing to range
+predicates (>= and <) reduced scans from 60 partitions to 1.
+
+Q37. A batch query runs 2 hours. Walk me through your tuning method.
+A37. 1) Capture actual plan with row-source stats. 2) Find the step with
+most time/buffers. 3) Check estimates vs actuals. 4) Verify stats, indexes,
+partition pruning, join order. 5) Check waits (ASH/SQL Monitor): IO, temp,
+locks. 6) Consider rewrites: push filters early, remove unnecessary
+DISTINCT/ORDER BY, replace scalar subqueries with joins, use analytic
+functions. 7) Consider parallelism/direct-path/partition-wise joins.
+8) Measure after each change; keep a before/after log.
+REAL-WORLD: Reduced a 2h reconciliation job to 9 minutes by eliminating a
+scalar subquery executed per row and using a hash join.
+
+Q38. What is clustering factor and why does it matter?
+A38. It measures how well table row order matches index order. Low (close to
+block count) = good, range scans touch fewer table blocks. High (close to row
+count) = poor; optimizer may prefer full scan. Fix by reorganizing data
+(CTAS ordered by index key), or use IOT / partitioning, rather than rebuilding
+the index (rebuild doesn't change it).
+REAL-WORLD: A "good" index was ignored because the clustering factor was
+near the row count; reloading data ordered by key made it useful.
+
+Q39. Materialized views: refresh types and when to use?
+A39. Refresh methods: COMPLETE, FAST (needs MV logs), FORCE; modes ON
+DEMAND / ON COMMIT. Query rewrite lets optimizer use the MV transparently.
+Fast refresh requires restrictions and MV logs overhead on base tables. For
+heavy aggregation reporting, MV with partition change tracking (PCT) is
+very effective. Atomic_refresh=FALSE uses truncate + insert (faster).
+REAL-WORLD: Built daily aggregate MVs with fast refresh for dashboards,
+dropping dashboard query time from 40s to under 2s.
+
+Q40. What tools do you use for diagnosing performance?
+A40. SQL Trace/TKPROF (10046), DBMS_XPLAN, AWR/ASH/ADDM reports, SQL Monitor
+(real-time for long-running/parallel), V$SESSION_WAIT / V$ACTIVE_SESSION_
+HISTORY, DBMS_APPLICATION_INFO for tagging, SQL Tuning Advisor, PL/SQL
+hierarchical profiler (DBMS_HPROF).
+REAL-WORLD: Used ASH to prove a slow job was waiting on "enq: TX - row lock
+contention" rather than a bad plan, saving days of misdirected tuning.
+
+Q41. How do you tune parallel query/DML? Risks?
+A41. Use PARALLEL hints or table DOP, ALTER SESSION ENABLE PARALLEL DML for
+DML. Benefits: big scans/joins/loads. Risks: resource exhaustion, skew, uses
+direct path (needs commit before reading), many parallel slaves hurting OLTP.
+Check "PX Deq" waits and distribute method in plan.
+REAL-WORLD: Limited DOP to 8 for nightly batch using Resource Manager so it
+didn't starve online users.
+
+Q42. When do you use RESULT_CACHE?
+A42. For frequently executed queries/functions over slowly changing data
+(lookup tables). SQL hint /*+ RESULT_CACHE */ or function RESULT_CACHE.
+Invalidated on any DML to dependencies, so avoid for volatile data. Watch
+latch contention under extreme concurrency.
+REAL-WORLD: Cached a currency-rate lookup function; reduced repeated calls
+by millions per day.
+
+Q43. Direct-path insert and NOLOGGING - how and trade-offs?
+A43. INSERT /*+ APPEND */ writes above the high-water mark, bypassing the
+buffer cache, generating minimal undo (and minimal redo if NOLOGGING or
+table in NOLOGGING mode and not in FORCE LOGGING/Data Guard). Trade-offs:
+table locked exclusively until commit, space not reused from deleted
+blocks, recoverability concerns with NOLOGGING (take backup after), a
+direct-path-loaded table can't be queried in same transaction.
+REAL-WORLD: Used APPEND + parallel for monthly 100M row loads, with a
+backup after completion as per DBA policy.
+
+Q44. Sargability: how to write predicates that can use indexes?
+A44. Avoid functions on the indexed column. Instead of TRUNC(dt)=:d use
+dt >= :d AND dt < :d + 1. Instead of col + 0 = 10, col = 10. Instead of
+SUBSTR(col,1,3)='ABC', col LIKE 'ABC%'. Match datatypes. If function is
+unavoidable, create a function-based index.
+REAL-WORLD: Rewriting date predicates across a reporting package made
+several full scans disappear.
+
+Q45. High water mark, row chaining/migration, PCTFREE - explain.
+A45. HWM is the boundary of used blocks; full scans read up to it, so a
+table with lots of deletes still scans many empty blocks. Fix with
+ALTER TABLE ... SHRINK SPACE (row movement) or MOVE. Row migration
+occurs when updates grow rows beyond free space; PCTFREE reserves room.
+Chaining happens when a row is too big for one block.
+REAL-WORLD: Shrinking a queue table that held 1M deleted rows cut full-scan
+time from seconds to milliseconds.
+
+Q46. Common wait events and what they imply?
+A46. db file sequential read (single-block, index lookups); db file
+scattered read (multiblock, full scans); direct path read/write (parallel/
+temp); enq: TX row lock contention (app locking); log file sync (too many
+commits); latch/library cache (parsing); buffer busy waits (hot blocks).
+REAL-WORLD: High "log file sync" was due to commit inside a loop; moving the
+commit outside the loop fixed it.
+
+Q47. Scalar subquery in SELECT list: problem and fix?
+A47. A correlated scalar subquery can execute once per row (although
+Oracle's scalar subquery caching helps for repeated inputs). Fix: join/outer
+join with aggregation, or analytic function. Wrapping function calls in
+(SELECT func(x) FROM dual) enables caching and reduces context switches.
+REAL-WORLD: Replaced three scalar lookups with one outer join; runtime fell
+from 30 minutes to 3.
+
+==========================================================================
+ SECTION C: PL/SQL ADVANCED
+==========================================================================
+
+Q48. Why use packages instead of standalone procedures?
+A48. Encapsulation (public spec vs private body), modularity, overloading,
+session-level state, one-time initialization, better dependency handling
+(changing the body doesn't invalidate dependents; changing the spec does),
+whole package loaded in memory on first call, and easy grant management.
+REAL-WORLD: I structured code as layered packages (API / business logic /
+data access) so UI callers depended only on stable specs.
+
+Q49. What is package state and what problems can it cause?
+A49. Package-level variables persist for the session. Issues: ORA-04068
+("existing state of packages has been discarded") after recompilation in
+connection-pooled apps; memory growth with large collections; unexpected
+behavior with pooled sessions sharing state. Mitigate: avoid state, use
+PRAGMA SERIALLY_REUSABLE for large temp state, or handle 04068 by retry.
+REAL-WORLD: After a hot deployment, app servers threw ORA-04068; I removed
+cached state from the package and moved it to a table/result cache.
+
+Q50. Explicit cursor vs implicit cursor vs cursor FOR loop vs REF CURSOR?
+A50. Implicit: SQL%ROWCOUNT, SQL%FOUND after DML/SELECT INTO. Explicit:
+OPEN/FETCH/CLOSE for control. Cursor FOR loop: auto open/close and, since
+10g, array-fetches 100 rows automatically. REF CURSOR/SYS_REFCURSOR returns
+result sets to callers (Java/.NET). Strongly typed REF CURSOR checks the
+shape at compile time.
+REAL-WORLD: Exposed reporting data to .NET as SYS_REFCURSOR OUT params with
+a stable column contract documented in the spec.
+
+Q51. BULK COLLECT - benefits and the LIMIT clause?
+A51. Fetches many rows with one context switch between PL/SQL and SQL engine.
+Unbounded BULK COLLECT can exhaust PGA memory. Use LIMIT (100-1000):
+  LOOP
+    FETCH c BULK COLLECT INTO l_tab LIMIT 500;
+    EXIT WHEN l_tab.COUNT = 0;   -- not c%NOTFOUND (would skip last batch)
+    ...
+  END LOOP;
+REAL-WORLD: Fixed an out-of-memory ORA-04030 in a batch job by adding
+LIMIT 1000 to an unbounded BULK COLLECT.
+
+Q52. FORALL: how does it work? SAVE EXCEPTIONS, INDICES OF, VALUES OF?
+A52. FORALL sends the whole DML batch to the SQL engine in one switch.
+SAVE EXCEPTIONS continues past failing rows and raises ORA-24381; details
+in SQL%BULK_EXCEPTIONS(i).ERROR_INDEX / ERROR_CODE. INDICES OF handles
+sparse collections; VALUES OF drives from another collection of indexes.
+It is not a loop - only a single DML statement is allowed in the body.
+REAL-WORLD: Loaded 5M rows with FORALL + SAVE EXCEPTIONS, writing failed
+rows to a reject table with error codes, 20x faster than row-by-row.
+
+Q53. Collection types: associative arrays, nested tables, VARRAYs?
+A53. Associative array (INDEX BY): PL/SQL only, sparse, key by number or
+string, fast lookups (great as in-memory cache/map). Nested table: can be
+stored in DB columns, sparse after delete, supports MULTISET operators and
+TABLE(). VARRAY: bounded, ordered, dense, stored inline. Use associative
+arrays for lookups, nested tables for SQL interaction.
+REAL-WORLD: Replaced repeated lookup queries inside a loop with an
+associative array cache keyed by code, eliminating thousands of queries.
+
+Q54. What are pipelined table functions?
+A54. Functions that return rows as produced (PIPE ROW) so the consumer can
+start processing before the function ends, saving memory. Used in ETL
+(transform stage) and with PARALLEL_ENABLE + REF CURSOR for parallel
+pipelines. Query via SELECT * FROM TABLE(fn(...)).
+REAL-WORLD: Built a pipelined parser for flat-file lines (external table
+source) and fed it straight into INSERT ... SELECT.
+
+Q55. Best practices for exception handling in PL/SQL?
+A55. - Handle only what you can; let others propagate.
+  - Avoid WHEN OTHERS THEN NULL. If used, log and re-raise (RAISE).
+  - Use DBMS_UTILITY.FORMAT_ERROR_BACKTRACE (and FORMAT_ERROR_STACK) to
+    keep the original line number; RAISE preserves it, RAISE_APPLICATION_
+    ERROR(-20001..-20999) does not.
+  - PRAGMA EXCEPTION_INIT to name standard ORA- errors.
+  - An exception in the declaration section is not caught by the same
+    block's handler.
+  - Logging must use an autonomous transaction so it survives rollback.
+REAL-WORLD: Created a central error-logging package (error code, stack,
+backtrace, call stack, session info) used across 300+ procedures.
+
+Q56. What is an AUTONOMOUS_TRANSACTION? Use cases and dangers?
+A56. A PRAGMA making a subprogram run in an independent transaction that
+must commit/rollback itself. Good for audit/error logging, sequence
+number tables. Dangers: it doesn't see uncommitted data of parent (may
+deadlock if it touches same rows), hidden commits harm atomicity, and
+overuse hides design flaws.
+REAL-WORLD: Used only in the logging package; code reviews rejected other
+uses.
+
+Q57. Mutating table error (ORA-04091) - cause and fixes?
+A57. Row-level trigger reads/modifies the table that fired it. Fixes:
+compound trigger (collect keys in AFTER EACH ROW, process in AFTER
+STATEMENT) - best modern solution; or statement-level trigger with package
+collection (older way); or redesign to avoid trigger logic (constraints,
+APIs). Avoid autonomous transaction hack: gives inconsistent reads.
+REAL-WORLD: Replaced a package-variable workaround with a compound trigger
+to enforce a cross-row rule safely.
+
+Q58. Triggers - when to avoid? Compound triggers?
+A58. Triggers hide logic, hurt bulk performance, complicate debugging, and
+can cascade. Use for auditing, enforcing complex integrity not expressible
+declaratively, and DDL/logon events. Compound trigger has BEFORE
+STATEMENT, BEFORE/AFTER EACH ROW, AFTER STATEMENT sections sharing state
+in a single unit.
+REAL-WORLD: Moved business rules from triggers into a PL/SQL API package;
+triggers kept only for audit.
+
+Q59. Dynamic SQL: EXECUTE IMMEDIATE vs DBMS_SQL; SQL injection protection?
+A59. EXECUTE IMMEDIATE is simple and fast for known number of binds. DBMS_SQL
+is needed when columns/binds count are unknown at compile time (describe
+columns, bind dynamically). Prevent injection: always use bind variables
+(USING), validate identifiers with DBMS_ASSERT.SIMPLE_SQL_NAME /
+ENQUOTE_NAME / SQL_OBJECT_NAME, never concatenate user input.
+REAL-WORLD: Built a generic export procedure using DBMS_SQL.DESCRIBE_COLUMNS
+and DBMS_ASSERT validation for table names.
+
+Q60. Definer's rights vs invoker's rights?
+A60. Default is definer's rights: runs with owner's privileges (good for
+controlled access via packages; roles are disabled inside). AUTHID
+CURRENT_USER runs with caller's privileges (roles enabled), used for
+generic utilities that should respect caller's access, or multi-schema
+deployments sharing code.
+REAL-WORLD: Exposed data through definer-rights packages so reporting users
+had no direct table grants.
+
+Q61. Calling PL/SQL functions from SQL: issues and solutions?
+A61. Each call incurs context switch; functions with side effects violate
+purity rules; can break read consistency if the function runs its own queries
+(statement-level consistency per call). Options: PRAGMA UDF (12c) to reduce
+overhead, WITH FUNCTION clause (12c), DETERMINISTIC (for same input same
+output) , RESULT_CACHE, scalar subquery caching, or rewrite in pure SQL.
+REAL-WORLD: Rewriting a per-row formatting function as a SQL expression cut
+a report from 12 min to 1.
+
+Q62. What is a context switch and how do you minimize it?
+A62. Transition between PL/SQL engine and SQL engine; each costs CPU. Minimize
+by using set-based SQL, BULK COLLECT, FORALL, avoiding functions in SQL
+that call SQL, PRAGMA UDF, and pushing logic into a single SQL statement.
+REAL-WORLD: Converted a 4-level nested cursor loop into a single INSERT ...
+SELECT with joins.
+
+Q63. How do you implement logging and instrumentation?
+A63. Central logging package with levels (DEBUG/INFO/ERROR), autonomous
+transaction inserts, correlation ID per run, DBMS_APPLICATION_INFO (module/
+action/client_info, SET_SESSION_LONGOPS), and optional toggle via config
+table. Keep logging overhead low in tight loops (log per batch).
+REAL-WORLD: Long-running ETL steps updated V$SESSION_LONGOPS so support
+could see progress without logging into the DB.
+
+Q64. Overloading and forward declarations?
+A64. Overloading: same name, different parameter signatures (number/types/
+order), only in packages/local blocks, not by return type or by subtypes with
+identical base types. Forward declaration lets a private subprogram be
+referenced before its definition in the package body.
+REAL-WORLD: Overloaded a LOG procedure for different message types.
+
+Q65. DBMS_SCHEDULER vs DBMS_JOB?
+A65. DBMS_SCHEDULER (10g+) supports calendaring syntax, job chains,
+dependencies, resource consumer groups, logging history, event-based jobs,
+remote/file watchers, job classes. DBMS_JOB is legacy and limited. Always use
+Scheduler for new work.
+REAL-WORLD: Built a job chain (load -> validate -> aggregate -> notify) with
+conditional steps and automatic retry on failure.
+
+Q66. Reading/writing files with UTL_FILE and external tables?
+A66. UTL_FILE needs DIRECTORY objects and grants (READ/WRITE on directory);
+good for generating files. For loading, external tables (ORACLE_LOADER or
+ORACLE_DATAPUMP) let you query files with SQL, in parallel, with REJECT
+LIMIT and bad/log files; prefer them for bulk ingestion.
+REAL-WORLD: Replaced a UTL_FILE parser (slow, line-by-line) with an external
+table + INSERT SELECT; load time dropped from 40 to 4 minutes.
+
+Q67. Conditional compilation?
+A67. $IF / $THEN / $ELSE / $END with $$PLSQL_UNIT, $$PLSQL_LINE and
+PLSQL_CCFLAGS (e.g., 'debug:true'), or version checks with DBMS_DB_VERSION.
+Useful for supporting multiple DB versions or removing debug code in prod.
+REAL-WORLD: Used a debug flag so test builds had assertions with no cost in
+production.
+
+Q68. Dependencies and invalidation - how do you manage them?
+A68. USER_DEPENDENCIES shows relations; DDL on a table invalidates
+dependents. 11g fine-grained dependency tracking avoids invalidation when
+unrelated columns change. Recompile with UTL_RECOMP/ALTER ... COMPILE.
+Edition-Based Redefinition (EBR) enables online application upgrades with
+editioning views and cross-edition triggers.
+REAL-WORLD: Planned releases to compile packages in dependency order and
+validate zero INVALID objects before go-live.
+
+Q69. NOCOPY hint and parameter modes?
+A69. IN passes by reference (read-only), OUT/IN OUT pass by value (copy in/
+copy out) which is costly for big collections; NOCOPY requests pass by
+reference. Caveat: if an exception occurs, changes are not rolled back to
+the original value (partially modified).
+REAL-WORLD: Used NOCOPY on collection IN OUT params of a transformation
+package to cut memory copying.
+
+Q70. How do you handle LOBs efficiently?
+A70. Use SecureFiles, DBMS_LOB (READ, WRITE, SUBSTR, APPEND), temporary LOBs
+(free them!), avoid converting CLOB to VARCHAR2 repeatedly, use chunked
+reads, compression/dedup in SecureFiles, and store LOBs in separate
+tablespace; avoid SELECT * when LOBs are present.
+REAL-WORLD: Fixed a temp tablespace growth issue caused by unreleased
+temporary LOBs (missing DBMS_LOB.FREETEMPORARY).
+
+Q71. Object types and member functions - have you used them?
+A71. CREATE TYPE with attributes and methods (MEMBER, STATIC, MAP/ORDER);
+used for table functions returning rows, collections of objects and
+APIs with structured parameters. Caution: evolving types (ALTER TYPE
+CASCADE) can be painful, so keep them for interface/in-memory structures.
+REAL-WORLD: Used object collection types as bulk input parameters from Java
+(array binding) into PL/SQL APIs.
+
+Q72. Associative array indexed by VARCHAR2 - use case?
+A72. Fast in-memory dictionary: l_map(code) := value; check l_map.EXISTS
+(code). Traverse with FIRST/NEXT. Great for dedupe in-memory, caching lookup
+data inside a batch, and grouping.
+REAL-WORLD: Built a per-run cache of reference data to avoid millions of
+repeated lookups.
+
+Q73. Slow-by-slow processing: how do you spot and fix it?
+A73. Symptoms: loop with SQL statements inside, row-level commits, high
+executions with small rows in AWR. Fix: single SQL (INSERT SELECT/MERGE),
+analytic functions, bulk operations, or at least BULK COLLECT/FORALL.
+Remember: the fastest PL/SQL loop is the one you don't write.
+REAL-WORLD: Reviewed AWR "SQL ordered by Executions", found a statement
+executed 20M times per run; collapsed to one MERGE.
+
+Q74. How do you profile PL/SQL code?
+A74. DBMS_PROFILER (older, line-level) and DBMS_HPROF (hierarchical,
+subprogram-level with call hierarchy, 11g+), plus PL/Scope for static
+analysis (finding unused variables, SQL in code). Use to find hot spots
+before optimizing.
+REAL-WORLD: HPROF revealed 70% time in a tiny validation function called
+per row; made it SQL-expression based.
+
+Q75. How do you unit test and deploy PL/SQL?
+A75. utPLSQL for unit tests (annotations, test suites, code coverage),
+version-controlled scripts (Git), CI pipeline (Jenkins/GitLab) with
+Liquibase/Flyway or scripted migrations, repeatable deployments, post-
+deploy invalid object check, rollback plan, code review checklist.
+REAL-WORLD: Introduced utPLSQL tests for core calculation packages; caught
+regression bugs before UAT.
+
+Q76. DBMS_LOCK / DBMS_PIPE / DBMS_ALERT / AQ - when used?
+A76. DBMS_LOCK.REQUEST/ALLOCATE_UNIQUE (user locks to serialize processes,
+e.g., ensure only one instance of a job runs); DBMS_ALERT and AQ for
+messaging; AQ (Advanced Queuing) for reliable transactional queues.
+Prefer AQ over polling tables.
+REAL-WORLD: Used a named lock to prevent concurrent runs of a
+non-reentrant batch procedure.
+
+Q77. Collection methods and gotchas?
+A77. EXISTS, COUNT, LIMIT, FIRST, LAST, NEXT, PRIOR, EXTEND, TRIM, DELETE.
+Gotchas: nested tables must be initialized and EXTENDed; DELETE makes
+nested tables sparse so use FIRST/NEXT instead of 1..COUNT loops; COUNT
+doesn't equal LAST when sparse; ORA-06533 subscript beyond count.
+REAL-WORLD: Fixed an intermittent ORA-06533 caused by looping 1..COUNT on a
+sparse nested table.
+
+Q78. What does your PL/SQL code review checklist include?
+A78. Set-based first; no WHEN OTHERS without re-raise; bind variables; no
+hard-coded values; bulk ops with LIMIT; commit/transaction control only at
+the outermost layer; naming standards; no SELECT *; %TYPE/%ROWTYPE usage;
+meaningful logging; privileges and AUTHID; unit tests; no unnecessary
+cursor loops; compile with PLSQL_WARNINGS enabled.
+REAL-WORLD: Introduced a checklist and static analysis (PL/Scope) in the
+pull request process.
+
+Q79. PLSQL_WARNINGS and optimization levels?
+A79. ALTER SESSION SET PLSQL_WARNINGS='ENABLE:ALL' flags performance and
+severe issues (unreachable code, missing RETURN). PLSQL_OPTIMIZE_LEVEL:
+2 default (inlining possible), 3 aggressive inlining; PRAGMA INLINE for
+control. Native compilation improves compute-heavy code, not SQL-heavy code.
+REAL-WORLD: Enabled warnings in CI so builds fail on severe warnings.
+
+Q80. How do you design a large data migration job in PL/SQL?
+A80. Stage -> validate -> transform -> load pattern. Use set-based SQL or
+bulk processing with LIMIT, checkpoint/restart table (batch id, last key),
+partition-wise processing and parallel execution, disable/recreate indexes
+only if justified, error table with reason codes, reconciliation counts and
+checksums at the end, rehearse in pre-prod with production-like volume.
+REAL-WORLD: Migrated ~800M rows in a weekend window with restartable chunks
+and reconciliation reports signed off by business.
+
+==========================================================================
+ SECTION D: TRANSACTIONS, LOCKING, CONCURRENCY
+==========================================================================
+
+Q81. Explain Oracle read consistency, undo and ORA-01555.
+A81. Queries see a snapshot as of query start (statement-level) using undo
+to rebuild old block versions; readers don't block writers. ORA-01555
+"snapshot too old" occurs when needed undo was overwritten. Causes: long
+queries, small UNDO_RETENTION/undo tablespace, commits inside a fetch loop
+across the same table being updated (fetch across commit). Fix: tune undo,
+shorten queries, commit after the loop, or use retention guarantee.
+REAL-WORLD: Fixed recurring 01555 by removing commit-inside-cursor-loop and
+sizing undo to hold 2 hours of changes.
+
+Q82. Isolation levels in Oracle?
+A82. READ COMMITTED (default, statement-level consistency) and SERIALIZABLE
+(transaction-level; may throw ORA-08177 can't serialize), plus READ ONLY.
+Oracle doesn't allow dirty reads. Non-repeatable reads and phantoms are
+possible under READ COMMITTED.
+REAL-WORLD: Used SET TRANSACTION READ ONLY so a multi-query month-end
+report saw one consistent point in time.
+
+Q83. Types of locks in Oracle? SELECT FOR UPDATE options?
+A83. TX (row/transaction lock), TM (table lock; modes RS, RX, S, SRX, X).
+Row-level locking with no escalation. SELECT FOR UPDATE variations:
+NOWAIT (error immediately), WAIT n (timeout), SKIP LOCKED (skip rows locked
+by others), OF column (which table's rows to lock).
+REAL-WORLD: Worker processes picked queue rows with FOR UPDATE SKIP LOCKED
+so many workers ran in parallel without contention.
+
+Q84. How do you find and resolve blocking sessions and deadlocks?
+A84. Use V$SESSION (BLOCKING_SESSION), V$LOCK, DBA_BLOCKERS/WAITERS, ASH.
+Deadlock (ORA-00060): Oracle detects and rolls back one statement; trace
+file shows graph. Prevent by consistent lock order, shorter transactions,
+indexing foreign keys (unindexed FKs cause table-level locks / deadlocks).
+REAL-WORLD: Deadlocks vanished after indexing an unindexed child FK column
+in a parent-child delete scenario.
+
+Q85. Lost updates: pessimistic vs optimistic locking?
+A85. Pessimistic: SELECT FOR UPDATE before updating. Optimistic: version
+column or ORA_ROWSCN; UPDATE ... WHERE id=:id AND version=:v; check
+SQL%ROWCOUNT, raise conflict if 0. Optimistic suits web apps with
+disconnected sessions.
+REAL-WORLD: Implemented version-column checks in the API layer for
+concurrent edits by multiple users.
+
+Q86. Sequences: gaps, caching, RAC?
+A86. Sequences are not gap-free (rollbacks, cache aging out, restarts);
+never use them for legal gap-free numbering (use a counter table with
+locking if truly required). CACHE improves performance; with RAC use
+CACHE + NOORDER for scalability; ORDER only if strict ordering needed.
+12c identity columns and DEFAULT seq.NEXTVAL simplify use.
+REAL-WORLD: Invoice numbers required gap-free; used a dedicated counter
+table with serialized access, and kept sequences for surrogate keys.
+
+Q87. Constraints: deferrable, ENABLE NOVALIDATE, and FK indexing?
+A87. Deferrable constraints are checked at commit (useful for circular
+inserts or bulk loads). ENABLE NOVALIDATE enforces for new data without
+checking existing rows (quick for legacy data). RELY/DISABLE for DW.
+Index foreign key columns to avoid locking and slow parent deletes.
+REAL-WORLD: Loaded parent and child in any order using INITIALLY DEFERRED
+constraints during a migration.
+
+Q88. Commit strategy in batch processing?
+A88. Commit per batch (e.g., every 10K-100K rows) with restartable
+checkpoints, never per row (log file sync) and not in the middle of a
+cursor fetch on same data (ORA-01555). For all-or-nothing business logic,
+commit once at end. Keep transaction control in the outermost procedure,
+not in reusable lower-level code.
+REAL-WORLD: Changed commit-every-row to commit-per-10K, slashing runtime
+from 3 hours to 25 minutes.
+
+Q89. How would you build a safe queue-processing table?
+A89. Table with status, picked_by, picked_ts. Workers claim rows:
+  SELECT id FROM q WHERE status='NEW' ORDER BY id
+  FETCH FIRST 100 ROWS ONLY FOR UPDATE SKIP LOCKED; (12c+ syntax varies;
+  alternatively use cursor with SKIP LOCKED)
+then mark PROCESSING, commit, process, mark DONE/FAILED with retry count.
+Index on status; purge/partition old rows. Or use Advanced Queuing.
+REAL-WORLD: Scaled from 1 to 8 workers linearly using SKIP LOCKED.
+
+Q90. Redo and undo generation: how do you reduce it?
+A90. Use set-based ops, direct-path loads, TRUNCATE instead of DELETE all,
+CTAS for big transforms, drop unneeded indexes before bulk load (and
+rebuild), avoid updating indexed columns, reduce row-by-row commits, use
+global temporary tables (undo only) for intermediate data.
+REAL-WORLD: Archive purge via partition DROP instead of DELETE eliminated
+hours of redo and archive log generation.
+
+==========================================================================
+ SECTION E: DESIGN, ARCHITECTURE & EXPERIENCE
+==========================================================================
+
+Q91. Normalization vs denormalization - how do you decide?
+A91. OLTP: 3NF to reduce anomalies and write cost. Reporting/DW: star
+schema, denormalized dimensions, pre-aggregated facts for read speed.
+Selective denormalization is OK when measured read benefits outweigh the
+maintenance cost, and kept consistent via constraints, MVs or triggers/ETL.
+REAL-WORLD: Kept core transactional model in 3NF and built a star-schema
+reporting layer fed by incremental loads.
+
+Q92. Partitioning strategies and index choices?
+A92. Range (dates), list (region), hash (even distribution), composite,
+interval (auto-create partitions), reference partitioning (child follows
+parent). Local indexes: easy maintenance, partition-wise operations;
+global indexes: needed for non-partition-key unique constraints but need
+UPDATE INDEXES during partition maintenance. EXCHANGE PARTITION loads data
+instantly via a swap with a staging table.
+REAL-WORLD: Converted a 2TB table to interval-partitioned by month, using
+online redefinition; purge became a partition drop.
+
+Q93. How do you implement Slowly Changing Dimension Type 2?
+A93. Columns: surrogate key, natural key, attributes, effective_from,
+effective_to, current_flag. Load: detect changed rows by comparing
+hash/columns; update old row's effective_to and flag, insert new version.
+Do it with one MERGE + INSERT, or a multi-step set-based approach; use a
+hash (ORA_HASH / STANDARD_HASH) of attributes for fast change detection.
+REAL-WORLD: Implemented SCD2 on a 30M-row customer dimension with
+STANDARD_HASH change detection; incremental run took minutes.
+
+Q94. How do you do schema changes with zero/low downtime?
+A94. Add nullable columns (fast, metadata-only; 11g+ add column with default
+is metadata-only), backward-compatible releases (expand/contract),
+DBMS_REDEFINITION for online table restructuring, EBR for code versions,
+create indexes ONLINE, avoid long DDL locks (DDL_LOCK_TIMEOUT), deploy in
+low-traffic windows with rollback scripts.
+REAL-WORLD: Changed a PK datatype on a busy table using online
+redefinition with no downtime for users.
+
+Q95. Design an incremental ETL / change data capture approach.
+A95. Options: timestamp/watermark columns, MV logs, Oracle Streams/
+GoldenGate/LogMiner (log based CDC), triggers (last resort), partition
+exchange for loads. Always: idempotent steps, restart checkpoints, audit
+counts, late-arriving data handling and reconciliation reports.
+REAL-WORLD: Replaced full nightly reloads with watermark-based incremental
+loads: 6 hours -> 35 minutes.
+
+Q96. Database security practices you follow as a developer?
+A96. Least privilege via roles; access through packages (definer rights);
+bind variables/DBMS_ASSERT against injection; Virtual Private Database
+(DBMS_RLS) or Real Application Security for row-level security; Data
+Redaction/masking for non-prod; Transparent Data Encryption (DBA);
+auditing (Unified Audit); no passwords in code (wallets).
+REAL-WORLD: Implemented VPD policies so regional managers only saw their
+region's rows without changing application queries.
+
+Q97. Key differences when migrating Oracle PL/SQL to PostgreSQL/SQL Server?
+A97. Empty string vs NULL; packages (absent or emulated with schemas); no
+autonomous transactions natively in PG (workarounds); sequences/identity
+syntax; DATE contains time in Oracle; outer join (+) syntax; CONNECT BY ->
+recursive CTE; ROWNUM/ROWID differences; exception semantics; transaction
+control in procedures; MERGE availability; implicit datatype conversion
+rules. Automated tools (ora2pg, SCT) get ~70-80%; rest is manual + testing.
+REAL-WORLD: Built a regression comparison harness running both DBs
+side-by-side to verify result parity.
+
+Q98. Tell me about a critical production incident you resolved.
+A98. (Use STAR: Situation, Task, Action, Result.) Example structure:
+  S: Month-end job suddenly ran 5x longer, blocking reports.
+  T: Restore SLA within hours, find root cause.
+  A: Checked ASH -> plan changed (PLAN_HASH_VALUE) after stats gather;
+     skewed column histogram caused nested loops; used SQL Plan Baseline
+     to restore the old plan immediately, then added extended stats and
+     adjusted stats-gathering for that table.
+  R: Job back to 20 minutes; added monitoring alert on plan change.
+Interviewers want diagnosis method, calm approach, prevention.
+
+Q99. How do you mentor juniors and enforce standards?
+A99. Code review checklists, coding standards document, reusable templates
+(logging, error handling), pair-tuning sessions with execution plans,
+brown-bag sessions on common anti-patterns, automated checks in CI
+(PL/Scope, utPLSQL), and clear naming/versioning policies.
+REAL-WORLD: Reduced production defects by introducing mandatory peer
+review and a SQL tuning checklist for all new queries on large tables.
+
+Q100. Describe the most complex database solution you designed. (Template)
+A100. Structure your answer:
+  1) Business problem and scale (rows, GB, users, SLA).
+  2) Architecture: schema design, partitioning, indexing strategy, APIs.
+  3) Key technical decisions + trade-offs you weighed (e.g., MERGE vs
+     staging swap, MV vs table, trigger vs API).
+  4) Performance results with numbers (before/after).
+  5) Reliability: error handling, restartability, monitoring, testing.
+  6) Lessons learned and what you'd improve.
+Example: "Designed a nightly settlement engine processing 50M transactions:
+interval-partitioned fact table, staged loads with INSERT APPEND, PL/SQL
+package with BULK COLLECT/FORALL and SAVE EXCEPTIONS, restartable batch
+control table, and reconciliation reports. Runtime dropped from 7h to
+50 minutes; zero data discrepancies after 12 months."
+
+==========================================================================
+ BONUS: QUICK TIPS FOR THE INTERVIEW
+==========================================================================
+- Always mention trade-offs ("it depends on data volume, concurrency, and
+  skew") - this signals seniority.
+- Quote numbers: rows processed, runtime before/after, tables sizes.
+- Know how to prove a claim: explain which view/tool (AWR, ASH,
+  DBMS_XPLAN) you used.
+- Prepare 2-3 real stories: a tuning win, a production incident, a design
+  decision you'd redo differently.
+- Be ready to write on a whiteboard: top-N per group, dedupe, running
+  total, gaps and islands, MERGE, a BULK COLLECT/FORALL skeleton.
+- Replace sample numbers in the REAL-WORLD lines with your own project
+  facts so every answer sounds authentic.
+
+                              -- END OF DOCUMENT --

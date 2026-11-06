@@ -1,0 +1,1042 @@
+==========================================================================
+ POSTGRESQL (SQL & PL/pgSQL) INTERVIEW Q&A - 100 QUESTIONS
+ FOR 6+ YEARS EXPERIENCE (Senior Database Developer level)
+==========================================================================
+
+HOW TO USE THIS DOCUMENT
+- Each answer gives the concept plus a "REAL-WORLD" line you can adapt to your
+  own project experience. At 6+ years, interviewers want trade-offs, internals,
+  failure cases and numbers, not definitions. Replace sample numbers with yours.
+- Version notes are given where a feature depends on the PostgreSQL version
+  (e.g. PG12, PG15, PG17). Know which version your production runs.
+- Sections:
+  A. Advanced SQL (Q1-25)
+  B. Performance Tuning & Planner (Q26-47)
+  C. PL/pgSQL & Extensibility (Q48-80)
+  D. MVCC, Transactions, Locking, Concurrency (Q81-90)
+  E. Design, Architecture & Experience (Q91-100)
+
+==========================================================================
+ SECTION A: ADVANCED SQL
+==========================================================================
+
+Q1. Difference between ROW_NUMBER, RANK, DENSE_RANK? What is DISTINCT ON?
+A1. ROW_NUMBER is unique even for ties; RANK leaves gaps after ties (1,1,3);
+DENSE_RANK has no gaps (1,1,2). PostgreSQL also has DISTINCT ON, a non-
+standard shortcut for "first row per group":
+  SELECT DISTINCT ON (customer_id) *
+  FROM orders ORDER BY customer_id, created_at DESC;
+It needs ORDER BY to start with the DISTINCT ON expressions and is often
+faster/simpler than ROW_NUMBER()=1, but ROW_NUMBER is portable and handles
+"top N" cases.
+REAL-WORLD: I used DISTINCT ON with a matching composite index
+(customer_id, created_at DESC) to fetch the latest record per customer from
+a 150M-row table; it became an index scan instead of a big sort.
+
+Q2. Explain window frames: ROWS, RANGE, GROUPS. Give a running total example.
+A2. ROWS counts physical rows, RANGE groups peers by ORDER BY value, GROUPS
+(PG11+) counts peer groups. EXCLUDE CURRENT ROW / TIES / GROUP is available.
+Default frame with ORDER BY is RANGE UNBOUNDED PRECEDING TO CURRENT ROW, so
+ties are included together and it's slower than ROWS.
+  SUM(amount) OVER (PARTITION BY account_id ORDER BY txn_ts, txn_id
+                    ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+REAL-WORLD: A ledger report showed odd balances for same-timestamp rows until
+I switched to explicit ROWS with a unique tiebreaker column.
+
+Q3. How do you solve "gaps and islands" problems?
+A3. Row-number-difference technique:
+  SELECT min(d), max(d)
+  FROM (SELECT d, d - (row_number() OVER (ORDER BY d))::int AS grp FROM t) x
+  GROUP BY grp;
+For dates, subtract the row number as days. LAG/LEAD can detect gaps.
+generate_series + LEFT JOIN is used to find missing values.
+REAL-WORLD: Used it to find missing daily batch loads and continuous coverage
+periods in subscription data.
+
+Q4. Recursive CTEs: how do you handle cycles and ordering? Alternatives?
+A4. WITH RECURSIVE has anchor + recursive term (UNION ALL). PG14+ adds
+SEARCH DEPTH/BREADTH FIRST and CYCLE clauses to order results and detect
+loops. Before PG14, carry a path array and check "NOT id = ANY(path)".
+For trees queried constantly, consider ltree extension (path-based, GiST
+index) or materialized path/closure table.
+REAL-WORLD: Exploded a bill-of-materials with a recursive CTE using a CYCLE
+clause so bad data could not cause an infinite loop; switched hot category
+trees to ltree for fast subtree queries.
+
+Q5. INSERT ... ON CONFLICT vs MERGE - when to use which?
+A5. ON CONFLICT (PG9.5+) is atomic upsert on a unique index/constraint:
+  INSERT ... ON CONFLICT (key) DO UPDATE SET col = EXCLUDED.col
+  [WHERE condition] / DO NOTHING.
+It is safe under concurrency. MERGE (PG15+) is SQL-standard, supports
+WHEN MATCHED / NOT MATCHED / NOT MATCHED BY SOURCE (PG17) with DELETE and
+conditions, and PG17 adds MERGE ... RETURNING and merge_action(). But MERGE
+can still raise unique violations under concurrent inserts since it doesn't
+use speculative insertion.
+Pitfall: "ON CONFLICT DO UPDATE command cannot affect row a second time" -
+the source batch has duplicate keys; dedupe it first (DISTINCT ON).
+REAL-WORLD: Used ON CONFLICT for high-concurrency event ingestion and MERGE
+for batch dimension syncs with multiple actions.
+
+Q6. IN vs EXISTS vs JOIN; what's the NOT IN NULL trap?
+A6. PostgreSQL plans IN/EXISTS as semi-joins, NOT EXISTS as anti-joins.
+NOT IN (subquery) returns no rows if the subquery yields any NULL (three-
+valued logic) and often can't use a hash anti-join (slow "hashed SubPlan"
+or repeated subplan). Prefer NOT EXISTS or LEFT JOIN ... IS NULL.
+REAL-WORLD: A "customers without orders" job returned zero rows in
+production because of one NULL; NOT EXISTS fixed it and it ran 50x faster.
+
+Q7. How do you delete duplicate rows from a large table safely?
+A7. Small: DELETE FROM t a USING t b WHERE a.ctid > b.ctid AND a.k = b.k;
+or DELETE WHERE ctid IN (SELECT ctid FROM (SELECT ctid, row_number() OVER
+(PARTITION BY k ORDER BY ctid) rn FROM t) x WHERE rn > 1). Huge: CREATE
+TABLE new AS SELECT DISTINCT ON (k) ..., recreate indexes/constraints, swap
+names in one transaction (DDL is transactional in PG). Then add a UNIQUE
+constraint. Run VACUUM afterwards since deletes leave dead tuples.
+REAL-WORLD: For 400M rows with 25% duplicates, CTAS + swap was far faster and
+created less WAL/bloat than DELETE.
+
+Q8. Top-N per group - what are your options?
+A8. (a) row_number()/rank() in subquery, filter <= N. (b) LATERAL join with
+ORDER BY ... LIMIT N per parent - excellent with an index when parent set is
+small:
+  SELECT c.id, o.* FROM customers c
+  CROSS JOIN LATERAL (SELECT * FROM orders o WHERE o.customer_id=c.id
+                      ORDER BY created_at DESC LIMIT 3) o;
+(c) DISTINCT ON for top-1.
+REAL-WORLD: "Last 3 orders per customer" for 40K customers with LATERAL +
+index (customer_id, created_at DESC) ran in milliseconds vs seconds with
+window functions over the whole table.
+
+Q9. Conditional aggregation, FILTER clause and crosstab?
+A9. FILTER is cleaner than CASE inside aggregates:
+  count(*) FILTER (WHERE status='PAID'), sum(amt) FILTER (WHERE ...)
+PostgreSQL has no PIVOT keyword. Use FILTER/CASE for known columns, or
+tablefunc extension crosstab() (needs column definition list), or build
+dynamic SQL with format() and EXECUTE for unknown columns.
+REAL-WORLD: Built a monthly pivot report using FILTER columns generated by a
+function that produced the SQL text from distinct months, validated with
+format('%I').
+
+Q10. string_agg / array_agg: ordering and pitfalls?
+A10. Aggregate ORDER BY inside the call: string_agg(name, ',' ORDER BY name).
+DISTINCT works too but ORDER BY must match the DISTINCT expression. NULLs are
+skipped by string_agg but kept by array_agg. Large aggregates can use lots of
+memory (max field size 1 GB). array_agg(...) is useful to return child rows
+as a single column with row_to_json.
+REAL-WORLD: Replaced N+1 child queries from an API with a single query using
+jsonb_agg + LEFT JOIN LATERAL.
+
+Q11. How does NULL behave in PostgreSQL? How is it different from Oracle?
+A11. Comparisons with NULL give UNKNOWN; use IS [NOT] DISTINCT FROM for
+NULL-safe comparison. Aggregates ignore NULLs (except count(*)). Empty string
+is NOT NULL in PostgreSQL (in Oracle it is). UNIQUE allows multiple NULLs by
+default; PG15+ supports UNIQUE NULLS NOT DISTINCT. B-tree indexes do store
+NULLs so IS NULL can use an index. COALESCE is standard; no NVL.
+REAL-WORLD: In an Oracle-to-PG migration, empty-string checks (col IS NULL)
+broke; I wrote a test suite to find them.
+
+Q12. Outer join: condition in ON vs WHERE?
+A12. A WHERE filter on the nullable side of a LEFT JOIN eliminates the NULL-
+extended rows and turns it into an inner join (the planner even rewrites it).
+Put such filters in ON to keep unmatched left rows.
+REAL-WORLD: A dashboard dropped customers with no orders after a filter was
+moved to WHERE; fixed in ON clause.
+
+Q13. UNION vs UNION ALL and other set operations?
+A13. UNION removes duplicates (HashAggregate/Sort cost). UNION ALL just
+appends; PG can use Append with parallel/partition-wise plans. Use UNION ALL
+unless duplicates are possible and unwanted. EXCEPT/INTERSECT also do
+distinct work and have ALL variants.
+REAL-WORLD: Changing UNION to UNION ALL on disjoint partitions removed a
+costly hash aggregate in a reporting view.
+
+Q14. CTEs: materialization behavior and data-modifying CTEs?
+A14. Before PG12, CTEs were always optimization fences (materialized). PG12+
+inlines non-recursive, side-effect-free CTEs referenced once. Control with
+WITH x AS MATERIALIZED (...) or NOT MATERIALIZED. Data-modifying CTEs let
+you chain DML atomically:
+  WITH moved AS (DELETE FROM orders WHERE created_at < now()-'1 year'::interval
+                 RETURNING *)
+  INSERT INTO orders_archive SELECT * FROM moved;
+REAL-WORLD: Used MATERIALIZED to prevent re-evaluating an expensive
+aggregation referenced thrice, and the DELETE..RETURNING pattern for
+atomic archival.
+
+Q15. What is LATERAL? Where else do you use set-returning functions in FROM?
+A15. LATERAL lets a subquery/function in FROM reference columns from earlier
+FROM items (per-row evaluation). Used for top-N per group, unnest/
+jsonb_array_elements per row, and calling set-returning functions per row.
+unnest(...) WITH ORDINALITY preserves array position.
+REAL-WORLD: Flattened nested JSON arrays per order with CROSS JOIN LATERAL
+jsonb_array_elements for a reporting view.
+
+Q16. Range types and exclusion constraints - practical use?
+A16. Range types (tstzrange, daterange, int4range) represent intervals with
+operators (&&, @>, -|-). EXCLUDE USING gist (room_id WITH =, period WITH &&)
+guarantees no overlapping bookings at the database level (needs btree_gist
+for scalar equality). Also good for temporal validity in SCD tables.
+REAL-WORLD: Replaced race-prone application checks for double bookings with
+an exclusion constraint; zero overlaps since.
+
+Q17. GROUPING SETS, ROLLUP, CUBE?
+A17. Compute multiple aggregation levels in one pass:
+  GROUP BY ROLLUP (year, month) -> detail, year subtotals, grand total.
+CUBE gives all combinations. Use GROUPING(col) to distinguish real NULLs
+from subtotal NULLs.
+REAL-WORLD: One ROLLUP query replaced four UNION ALL queries in a finance
+report, scanning the fact table once.
+
+Q18. JSON vs JSONB - operators, indexing, SQL/JSON?
+A18. JSON stores text as-is; JSONB is binary, supports indexing and faster
+operators, but loses key order and duplicates. Operators: ->, ->>, #>, @>,
+?, ?|, jsonb_path_query (jsonpath). Index: GIN (default for @>, ?) or
+jsonb_path_ops (smaller/faster for @> only); expression indexes on
+(data->>'id') for specific keys. PG16-17 add SQL/JSON constructors and
+JSON_EXISTS/JSON_VALUE/JSON_QUERY/JSON_TABLE (PG17). Large JSON updates
+rewrite the entire value (TOAST), so avoid frequent partial updates of big
+documents.
+REAL-WORLD: Stored vendor payloads in JSONB with a GIN jsonb_path_ops index
+for containment search and promoted frequently filtered keys to real columns.
+
+Q19. Generating date series and calendar logic?
+A19. generate_series(start, end, '1 day'::interval) works for dates and
+timestamps. Join to a calendar dimension (holidays, fiscal periods,
+business-day flags) rather than hard-coding weekend logic. For gaps:
+LEFT JOIN generate_series to fact data and COALESCE to zero.
+REAL-WORLD: A calendar dimension simplified business-day SLA calculations
+across dozens of queries.
+
+Q20. Full-text search and trigram search?
+A20. Full-text: tsvector + tsquery, to_tsvector('english', col), GIN index,
+ranking with ts_rank, websearch_to_tsquery. Stored/generated tsvector column
+avoids recomputation. pg_trgm + GIN/GiST supports LIKE '%abc%', ILIKE,
+similarity and typo-tolerant search.
+REAL-WORLD: Replaced slow ILIKE '%term%' scans with pg_trgm GIN index;
+searches dropped from 3s to ~20ms.
+
+Q21. Generated columns, identity columns, serial?
+A21. GENERATED ALWAYS AS (expr) STORED (PG12+; virtual generated columns
+arrived in PG18). Identity columns (PG10+): GENERATED ALWAYS/BY DEFAULT AS
+IDENTITY are SQL-standard and preferred over serial (owned sequence,
+cleaner permissions and pg_dump behavior). Gotcha: sequences are not rolled
+back and may have gaps.
+REAL-WORLD: Used a stored generated column for normalized email (lower())
+with a unique index.
+
+Q22. COPY and bulk loading features?
+A22. COPY FROM/TO is the fastest path (also \copy in psql for client files).
+Options: FORMAT csv/binary, FREEZE (with same-transaction table creation),
+PG17 ON_ERROR ignore, LOG_VERBOSITY. Combine with unlogged/staging tables,
+then INSERT ... SELECT or MERGE into final tables.
+REAL-WORLD: Loaded 200M rows nightly via COPY into an unlogged staging
+table, validated with SQL, then upserted into the target in batches.
+
+Q23. Arrays in PostgreSQL: when are they good or bad?
+A23. Good for small, bounded lists (tags, ids) and passing batches to
+functions (= ANY($1::int[]), unnest). Support GIN indexes (@>, &&). Bad when
+you need FK integrity, frequent element updates, or large cardinality -
+normalize instead. Arrays are 1-based; NULL elements allowed; ANY(array)
+behaves differently from IN (list) regarding planning.
+REAL-WORLD: Passed 10K ids as one array parameter to avoid a giant IN list.
+
+Q24. Keyset (seek) pagination vs OFFSET?
+A24. OFFSET reads and discards rows, so deep pages are slow. Keyset:
+  WHERE (created_at, id) < ($1, $2)
+  ORDER BY created_at DESC, id DESC LIMIT 50
+supported by a composite index on (created_at DESC, id DESC) or reverse scan.
+Row-value comparison needs all columns in the same sort direction;
+otherwise expand the condition with OR. ORDER BY must be deterministic.
+REAL-WORLD: Moving an API to keyset pagination reduced page-1000 latency from
+2.3s to 8ms.
+
+Q25. Time zones: timestamp vs timestamptz?
+A25. timestamptz stores UTC instants and converts to the session TimeZone on
+display; timestamp has no zone semantics. Prefer timestamptz for events.
+Use AT TIME ZONE carefully (it flips type). date_trunc with zone-aware
+boundaries, and avoid mixing; DST bugs are common.
+REAL-WORLD: Fixed daily reports that were off by an hour around DST by
+grouping on date_trunc('day', ts AT TIME ZONE 'America/New_York').
+
+==========================================================================
+ SECTION B: PERFORMANCE TUNING & PLANNER
+==========================================================================
+
+Q26. How do you read an execution plan? What do you check first?
+A26. Use EXPLAIN (ANALYZE, BUFFERS, VERBOSE, SETTINGS). Compare estimated
+rows vs actual rows per node; big mismatches usually mean bad statistics or
+correlated columns. Check node types (Seq/Index/Bitmap scan, join type),
+loops (actual time x loops), "Rows Removed by Filter", Buffers
+(shared hit vs read), sort/hash spills ("Disk:"), and planning vs execution
+time. Caution: EXPLAIN ANALYZE actually executes the statement - wrap DML in
+BEGIN ... ROLLBACK. Use auto_explain for production captures.
+REAL-WORLD: Rows estimated 10 vs 3M actual; CREATE STATISTICS on two
+correlated columns changed a nested loop to a hash join.
+
+Q27. A query was fast yesterday and slow today. How do you investigate?
+A27. 1) pg_stat_statements: compare mean/total time, calls, shared blks read.
+2) Plan change: auto_explain / re-run EXPLAIN, check generic vs custom plan
+for prepared statements. 3) Stats stale: last_analyze / autovacuum status
+(pg_stat_user_tables). 4) Bloat or dead tuples, long transactions holding
+back vacuum. 5) Locks/waiting (pg_stat_activity wait_event). 6) Data
+growth/skew, new partition, parameter changes, cache cold start after restart.
+REAL-WORLD: A plan flipped after a bulk load because autovacuum hadn't
+analyzed yet; I added an explicit ANALYZE as the last step of the ETL job.
+
+Q28. Index types in PostgreSQL and when to use each?
+A28. - B-tree: default; equality/range/sort; supports dedup (PG13+).
+  - Hash: equality only; WAL-logged since PG10; rarely better than B-tree.
+  - GIN: multi-valued data (jsonb, arrays, tsvector, trigram); slower
+    writes (fastupdate/pending list).
+  - GiST: geometric, ranges, exclusion constraints, nearest-neighbor.
+  - SP-GiST: partitioned search trees (prefix, IP, quadtrees).
+  - BRIN: tiny index for huge, naturally ordered tables (timestamps in
+    append-only logs).
+  Variants: partial, expression, covering (INCLUDE), multicolumn.
+REAL-WORLD: Replaced a 40 GB B-tree on an append-only event timestamp with a
+BRIN index (few MB) for time-range scans on a 1.5 TB table.
+
+Q29. Composite, partial, covering and expression indexes?
+A29. Composite: equality columns first, then range/sort columns; the leading
+column is most important (PG18 adds B-tree skip scan, which helps when the
+leading column has few distinct values, but don't rely on it). Partial:
+CREATE INDEX ... WHERE status='OPEN' - small and fast for hot subsets.
+Covering: INCLUDE (cols) enables index-only scans. Expression: ON
+(lower(email)) to match query expression exactly.
+REAL-WORLD: A partial index on unprocessed rows (status='NEW') shrank from
+12 GB to 40 MB and sped up the queue poller.
+
+Q30. Index exists but is not used - why?
+A30. - Function/cast on column not matching an expression index.
+  - Datatype mismatch (e.g. int column vs numeric/text param), collation
+    mismatch (LIKE 'abc%' needs text_pattern_ops in non-C locale).
+  - Low selectivity so Seq Scan is cheaper; stale stats.
+  - Leading column of composite missing; OR conditions.
+  - random_page_cost too high for SSD (default 4.0; try ~1.1).
+  - Index not valid (failed CREATE INDEX CONCURRENTLY) - check indisvalid.
+  - Planner correctly chose a bitmap scan for many rows.
+REAL-WORLD: LIKE 'abc%' ignored a normal index under en_US collation; adding
+varchar_pattern_ops fixed it.
+
+Q31. Nested loop, hash join, merge join - when does each win?
+A31. Nested loop: small outer set + indexed inner lookup (OLTP). Hash join:
+large equi-joins; builds hash on smaller side; spills to disk if exceeding
+work_mem x hash_mem_multiplier (batches > 1 in EXPLAIN). Merge join: both
+inputs sorted/indexed or large sorted joins. Wrong choices trace back to
+estimates; parallel hash joins appear for big scans.
+REAL-WORLD: A nested loop over 5M outer rows ran 40 minutes; after fixing
+stats and raising work_mem for that job, a hash join finished in 70s.
+
+Q32. Prepared statements: generic vs custom plans?
+A32. For the first 5 executions PG builds custom plans using the bind values;
+after that it may switch to a cached generic plan if its estimated cost is not
+much worse than custom plans' average. With skewed data the generic plan can
+be terrible. Control with plan_cache_mode (PG12+): auto /
+force_custom_plan / force_generic_plan. Poolers (PgBouncer transaction mode)
+complicate server-side prepared statements.
+REAL-WORLD: After moving to a pooled driver, a skewed-key query turned slow
+on the 6th execution; set plan_cache_mode=force_custom_plan for that role.
+
+Q33. How do statistics work and how do you manage them?
+A33. ANALYZE samples tables into pg_statistic (most common values,
+histograms, n_distinct, correlation). Tune default_statistics_target (100)
+or per column ALTER TABLE ... ALTER COLUMN SET STATISTICS. Extended statistics
+(CREATE STATISTICS: dependencies, ndistinct, mcv) fix correlated column and
+multi-column estimates. Autovacuum runs auto-analyze on thresholds; for
+big tables lower the scale factor per table or call ANALYZE after loads.
+REAL-WORLD: Raised statistics target to 1000 for a skewed tenant_id column,
+which fixed estimates for large tenants.
+
+Q34. Does PostgreSQL support hints? What do you use instead?
+A34. Not in core by design. Options: fix statistics, indexes, rewrite SQL
+(CTE MATERIALIZED, OFFSET 0 trick, LATERAL), session-level planner GUCs
+(enable_nestloop=off etc.) for diagnosis only, SET LOCAL for a specific
+transaction, and extension pg_hint_plan when really needed. There are no
+built-in plan baselines.
+REAL-WORLD: Used SET LOCAL work_mem and enable_nestloop in a nightly report
+transaction instead of changing global settings.
+
+Q35. Planning time, JIT and many-partition overhead?
+A35. Planning can be significant with many partitions/joins (join_collapse_
+limit, from_collapse_limit, geqo_threshold for >12 tables). JIT compilation
+(enabled by default since PG12) helps long analytical queries but can add
+hundreds of ms to short ones - often disabled for OLTP. Prepared statements
+amortize planning cost.
+REAL-WORLD: Turning JIT off for the OLTP role removed random 200 ms
+latency spikes.
+
+Q36. Partition pruning - how it works, how to verify?
+A36. Static pruning at plan time with constants; dynamic pruning at
+execution time for parameters/subqueries/nested loops ("Subplans Removed" in
+EXPLAIN). Requires predicates directly on the partition key without non-
+immutable function wrapping. Check enable_partition_pruning. Too many
+partitions (thousands) hurt planning time and memory.
+REAL-WORLD: date_trunc('day', ts) = ... blocked pruning; rewriting as range
+predicate pruned 59 of 60 partitions.
+
+Q37. A query runs 2 hours. Walk me through your tuning method.
+A37. 1) Capture actual plan with EXPLAIN (ANALYZE, BUFFERS). 2) Find the
+node consuming most time/buffers. 3) Estimates vs actuals, stats, indexes,
+join order. 4) Check spills (sort/hash disk), work_mem, parallel workers.
+5) Rewrite: pre-filter earlier, replace correlated subqueries with joins,
+window functions, avoid DISTINCT/ORDER BY where unnecessary, batch big
+updates. 6) Consider partitioning, materialized/summary tables. 7) Measure
+each change; keep a before/after record.
+REAL-WORLD: Cut a 2-hour reconciliation to 8 minutes by replacing a
+correlated subquery with a hash join and adding a partial index.
+
+Q38. Index-only scans, visibility map, and correlation?
+A38. Index-only scans avoid heap visits only for pages marked all-visible in
+the visibility map, so VACUUM frequency matters ("Heap Fetches" in EXPLAIN).
+Column correlation (pg_stats.correlation) near +-1 means the heap order
+matches index order, making index range scans cheap; low correlation favors
+bitmap scans. CLUSTER or pg_repack can reorder a table (one-time, not
+maintained).
+REAL-WORLD: An index-only scan did 2M heap fetches until autovacuum was
+tuned; fetches dropped to near zero.
+
+Q39. Materialized views - refresh and limitations?
+A39. REFRESH MATERIALIZED VIEW locks reads; REFRESH ... CONCURRENTLY allows
+reads but needs a UNIQUE index and is slower (diff-based). No native
+incremental refresh in core (pg_ivm extension or custom summary tables with
+triggers / jobs). Index materialized views like tables. Schedule with pg_cron
+or external scheduler.
+REAL-WORLD: Dashboard aggregates in a materialized view refreshed
+CONCURRENTLY every 10 minutes: query time from 40s to under 1s.
+
+Q40. What tools do you use to diagnose performance?
+A40. pg_stat_statements (top SQL by time/calls/IO), pg_stat_activity (wait
+events, state, query age), auto_explain, log_min_duration_statement,
+log_lock_waits, pg_stat_user_tables/indexes (seq scans, unused indexes),
+pg_stat_io (PG16+), pg_stat_progress_* views, pgBadger for log analysis,
+EXPLAIN visualizers, perf/OS metrics, and monitoring (Prometheus
+postgres_exporter, pgwatch).
+REAL-WORLD: pg_stat_statements showed one query using 38% of total DB time;
+a missing composite index fixed it.
+
+Q41. Parallel query: when does it help and what are the limits?
+A41. Parallel seq scan, index scan, hash join, aggregate, append. Controlled
+by max_parallel_workers_per_gather, parallel_setup_cost, table size
+thresholds. Not used inside functions marked PARALLEL UNSAFE, with writable
+CTEs, cursors, or SERIALIZABLE (in older versions). Big queries benefit; OLTP
+can be hurt by worker overhead and CPU saturation.
+REAL-WORLD: Set max_parallel_workers_per_gather=4 for the reporting role
+only, leaving OLTP at 0-2.
+
+Q42. Key memory parameters and how do you reason about them?
+A42. shared_buffers (~25% RAM start point), effective_cache_size (planner
+hint about OS+PG cache), work_mem (per sort/hash node per query - can
+multiply across nodes and connections!), hash_mem_multiplier,
+maintenance_work_mem (VACUUM/CREATE INDEX), wal_buffers, max_connections.
+Raise work_mem per session/role for heavy jobs rather than globally.
+REAL-WORLD: A global work_mem increase caused OOM kills under concurrency;
+I reverted it and used SET LOCAL for the batch role.
+
+Q43. Fastest way to bulk load data?
+A43. COPY; load into an UNLOGGED or fresh table; create indexes/constraints
+after loading; larger maintenance_work_mem; increase max_wal_size to avoid
+frequent checkpoints; synchronous_commit=off for the load session (only if
+loss of last few commits is acceptable); COPY FREEZE where applicable;
+batch inserts of multi-row VALUES if COPY unavailable; ANALYZE afterwards.
+There is no Oracle-style direct-path INSERT hint.
+REAL-WORLD: Rebuilt a 300M-row table via COPY into an unlogged table, built
+indexes in parallel, then swapped; 5h -> 50 min.
+
+Q44. Sargability: writing index-friendly predicates?
+A44. Avoid wrapping indexed columns in functions/casts: use
+created_at >= '2026-01-01' AND created_at < '2026-01-02' instead of
+created_at::date = '2026-01-01'; match datatypes; use text_pattern_ops for
+prefix LIKE; create expression indexes if function is unavoidable.
+REAL-WORLD: Fixing cast-on-column predicates removed several seq scans.
+
+Q45. Bloat, HOT updates, fillfactor, and vacuum tuning?
+A45. UPDATE/DELETE leave dead tuples; VACUUM reclaims space for reuse (not
+returned to the OS, except trailing pages); VACUUM FULL rewrites the table
+with ACCESS EXCLUSIVE lock; pg_repack does it online. HOT updates (no
+indexed column changed + free space in same page) avoid index churn; lower
+fillfactor (e.g. 80-90) on update-heavy tables to enable them. Tune
+autovacuum per table (autovacuum_vacuum_scale_factor=0.01-0.05 for big
+tables, cost limits). Long-running transactions and abandoned replication
+slots prevent cleanup.
+REAL-WORLD: An 800 GB table was 60% bloat from a stuck replication slot and
+long transaction; fixed both, then pg_repack reclaimed space online.
+
+Q46. Common wait events and what they imply?
+A46. Lock (relation/transactionid/tuple): app-level blocking. IO:DataFileRead:
+cache misses/seq scans. LWLock:BufferMapping/WALInsert: contention. IO:
+WALWrite / WALSync: commit rate or slow disks. Client:ClientRead: app is
+slow reading, idle in transaction. Activity: background.
+REAL-WORLD: Many sessions in "idle in transaction" with ClientRead led me to
+find an app bug holding transactions open during HTTP calls.
+
+Q47. Correlated subqueries, SQL function inlining and set-returning functions?
+A47. Correlated subqueries can run per outer row (SubPlan); the planner often
+converts EXISTS/IN to semi-joins but not scalar subqueries in SELECT lists.
+Rewrite as joins/LATERAL/window. Simple LANGUAGE sql functions (single SELECT,
+non-volatile, no side effects) can be inlined, allowing index usage; PL/pgSQL
+functions are opaque to the planner (default COST 100, ROWS 1000 estimates -
+set realistic COST/ROWS).
+REAL-WORLD: Converting a PL/pgSQL scalar helper to a SQL function allowed
+inlining and cut report time from 12 min to 90 s.
+
+==========================================================================
+ SECTION C: PL/pgSQL & EXTENSIBILITY
+==========================================================================
+
+Q48. Functions vs procedures in PostgreSQL?
+A48. Functions (CREATE FUNCTION) return values, are called in SQL, and run
+inside the caller's transaction (no COMMIT/ROLLBACK). Procedures (PG11+)
+are invoked with CALL, can COMMIT/ROLLBACK inside (when not called inside an
+explicit transaction block/other function), and can have INOUT params
+(OUT since PG14). Use procedures for batch/ETL orchestration; functions for
+reusable logic and SQL integration.
+REAL-WORLD: Rewrote a batch-load routine as a procedure that committed per
+50K-row chunk, which was impossible in a function.
+
+Q49. PostgreSQL has no packages. How do you organize code?
+A49. Use schemas as namespaces (billing.calc_tax), naming prefixes,
+extensions to package and version groups of objects, and migration tooling
+for deployments. For "package state": session-level variables via
+set_config('app.key', val, false)/current_setting(), temp tables, or
+tables. There's no package initialization block; functions are stateless
+between calls (plan caching aside).
+REAL-WORLD: Used one schema per domain (api, core, util) with api functions
+as the only exposed interface, granting EXECUTE only on api.
+
+Q50. Cursors in PL/pgSQL?
+A50. FOR rec IN SELECT ... LOOP uses an implicit cursor and fetches in
+batches - simplest option. Explicit: DECLARE c CURSOR FOR ...; OPEN/FETCH/
+CLOSE. REFCURSOR returns cursors to clients (valid only inside transaction
+unless WITH HOLD). Server-side cursors in drivers (named cursors/fetch size)
+avoid loading huge result sets in client memory.
+REAL-WORLD: Streamed a 50M-row export via a named cursor with fetch size
+10K instead of loading everything into app memory.
+
+Q51. How do you return result sets from functions?
+A51. RETURNS TABLE(...) or SETOF type with RETURN QUERY (adds all rows) or
+RETURN NEXT (row by row). PL/pgSQL materializes the entire result before
+returning (tuplestore) - not streaming like Oracle pipelined functions;
+for huge sets prefer LANGUAGE sql functions (can be inlined/streamed) or
+cursors.
+REAL-WORLD: A PL/pgSQL set-returning function over 20M rows consumed GBs of
+memory/temp; rewriting as a SQL function/view fixed it.
+
+Q52. Bulk operations: there is no BULK COLLECT/FORALL. What do you do?
+A52. Use set-based SQL (INSERT ... SELECT, UPDATE ... FROM, MERGE), pass
+arrays/JSON and unnest() into a single statement, use COPY from the app,
+batch multi-row inserts, and process in chunks with keys/ctid ranges plus
+COMMIT in procedures. PL/pgSQL loops with SQL inside are slower but there
+is less engine-switch cost than Oracle; still avoid row-by-row.
+REAL-WORLD: Replaced a 3M-iteration FOR loop with one UPDATE ... FROM
+(unnest) statement: 2 hours -> 40 seconds.
+
+Q53. Composite types, domains, enums - when to use?
+A53. Composite types model structured values and table row types (%ROWTYPE,
+table%ROWTYPE). Domains add reusable constraints on a base type (e.g.
+email, positive_int) - great for consistency. Enums are ordered label sets;
+adding values is easy (ALTER TYPE ADD VALUE) but removing is not, so use
+lookup tables for volatile lists.
+REAL-WORLD: Introduced domains for email/phone/postal code so validation
+lived in one place across 60+ tables.
+
+Q54. Function volatility, strictness, parallel safety, cost?
+A54. VOLATILE (default; may change data/results), STABLE (same results
+within a statement; can use index scans), IMMUTABLE (always same output;
+required for expression indexes). Mislabeling causes wrong results or
+index corruption. STRICT/RETURNS NULL ON NULL INPUT short-circuits.
+PARALLEL SAFE/RESTRICTED/UNSAFE controls parallel plans. COST and ROWS
+inform planner. LEAKPROOF matters with row-level security.
+REAL-WORLD: Marked a pure formatting function IMMUTABLE and PARALLEL SAFE,
+enabling an expression index and parallel scans.
+
+Q55. Exception handling best practices in PL/pgSQL?
+A55. BEGIN ... EXCEPTION WHEN unique_violation THEN ... END. Each block
+with an EXCEPTION clause creates a subtransaction (savepoint) - costly in
+tight loops, and many subtransactions per transaction (>64) can cause
+performance problems with snapshots (subxid overflow). Use GET STACKED
+DIAGNOSTICS (message, detail, hint, context, sqlstate), RAISE with ERRCODE,
+re-raise with plain RAISE, avoid blanket WHEN OTHERS THEN NULL, and ASSERT
+for internal checks.
+REAL-WORLD: Removed a per-row EXCEPTION block from a loop (used ON CONFLICT
+instead): throughput increased 5x and replica snapshot stalls disappeared.
+
+Q56. No autonomous transactions - how do you handle audit/error logging?
+A56. Options: (1) dblink/postgres_fdw loopback connection to insert logs in
+a separate transaction; (2) pg_background extension; (3) log via RAISE
+LOG/NOTICE to server logs and ship them; (4) LISTEN/NOTIFY to an external
+worker; (5) write logs after the failure at the application layer.
+Note: ordinary INSERT-based logging inside a transaction is rolled back with
+it.
+REAL-WORLD: Implemented error logging through a dblink loopback function
+for failed batch rows, with a fallback to RAISE LOG.
+
+Q57. Triggers: types, transition tables, event triggers?
+A57. BEFORE/AFTER/INSTEAD OF (views), row-level or statement-level, WHEN
+clause for conditional firing, and transition tables (REFERENCING NEW TABLE
+AS n) in statement-level AFTER triggers for efficient set-based auditing.
+No "mutating table" error like Oracle, but you can still see
+inconsistent results if reading the table being modified. Event triggers
+fire on DDL (audit, enforce naming). Triggers hide logic and add overhead;
+disable with session_replication_role for bulk loads (superuser) carefully.
+REAL-WORLD: Replaced a row-level audit trigger with a statement-level one
+using transition tables: bulk updates ran 6x faster.
+
+Q58. Dynamic SQL and SQL injection prevention?
+A58. EXECUTE 'SELECT ... WHERE id = $1' USING p_id; build identifiers with
+format('%I', name) or quote_ident, literals with %L or quote_literal -
+never concatenate raw input. Use USING for values. For arbitrary-column
+queries, validate against catalog tables (information_schema). Dynamic
+SQL isn't cached the same way as static PL/pgSQL statements, so prefer
+static SQL where possible.
+REAL-WORLD: Built a generic export function with format('%I.%I') and an
+allow-list lookup of table names.
+
+Q59. SECURITY DEFINER vs INVOKER, and the search_path risk?
+A59. INVOKER (default) runs with the caller's rights; DEFINER runs with the
+owner's privileges (like Oracle definer rights). Always add
+SET search_path = pg_catalog, myschema (or fully qualify) to DEFINER
+functions to prevent hijacking via malicious objects in the caller's
+search_path. REVOKE EXECUTE FROM PUBLIC and grant explicitly (functions
+are executable by PUBLIC by default).
+REAL-WORLD: Audited all SECURITY DEFINER functions, pinned search_path,
+and revoked PUBLIC execute as part of a security review.
+
+Q60. How does LISTEN/NOTIFY work and what are its limits?
+A60. NOTIFY channel, 'payload' (default max 8000 bytes) delivers events to
+listening sessions after the sending transaction commits. Not durable: if
+no one is listening, messages are lost; listeners need persistent
+connections (not transaction-mode pooling). Use for cache invalidation or
+wake-ups, with data stored in tables and the notification carrying ids.
+REAL-WORLD: Used NOTIFY to wake queue workers immediately rather than
+polling every second.
+
+Q61. Polymorphism, VARIADIC, default arguments, overloading?
+A61. Overloading by argument types is supported (ambiguity errors can occur
+with unknown literals). Polymorphic types anyelement/anyarray/anycompatible
+allow generic functions. Named notation (name => value) and defaults make
+APIs backward compatible. VARIADIC accepts variable argument lists as arrays.
+Changing a function's signature creates a new function; CREATE OR REPLACE
+cannot change argument types or return type.
+REAL-WORLD: Added new parameters with defaults to keep older callers working
+during a phased release.
+
+Q62. Logging, instrumentation and progress reporting?
+A62. RAISE NOTICE/LOG for debugging; log table via autonomous workaround;
+set application_name per job; track_functions = pl for pg_stat_user_functions;
+auto_explain.log_nested_statements for statements inside functions;
+pg_stat_progress_* for VACUUM/CREATE INDEX/COPY; custom progress via
+set_config or a progress table updated outside the long transaction.
+REAL-WORLD: ETL steps set application_name to job/step so support could see
+progress in pg_stat_activity.
+
+Q63. Scheduling jobs in PostgreSQL?
+A63. No built-in scheduler. Options: pg_cron extension (cron syntax, runs
+SQL inside DB), OS cron/systemd timers, Kubernetes CronJobs, pgAgent,
+orchestration tools (Airflow). Ensure single-run semantics with advisory
+locks (pg_try_advisory_lock) and idempotent jobs with retries and alerting.
+REAL-WORLD: Scheduled materialized view refreshes via pg_cron guarded by
+an advisory lock to avoid overlapping runs.
+
+Q64. Advisory locks - what are they for?
+A64. Application-defined locks on arbitrary bigint keys: session-level
+(pg_advisory_lock) or transaction-level (pg_advisory_xact_lock, released
+automatically). Use to serialize jobs, protect critical sections, or
+implement per-customer mutual exclusion. Danger: session locks persist
+through pooled connections; prefer xact-level locks.
+REAL-WORLD: Used pg_try_advisory_xact_lock(hashtext('nightly_close')) so
+only one instance of the close process ran across app nodes.
+
+Q65. Working with files and external data: COPY, file_fdw, postgres_fdw?
+A65. COPY (server-side needs privileges pg_read_server_files; client-side via
+\copy). file_fdw exposes files as foreign tables for SQL access.
+postgres_fdw queries remote PostgreSQL (push down WHERE/joins/aggregates
+where possible). Other FDWs: oracle_fdw, mysql_fdw, mongo_fdw. FDW
+performance depends on pushdown; check EXPLAIN VERBOSE for "Remote SQL".
+REAL-WORLD: Migrated data from legacy Oracle using oracle_fdw into staging
+tables with parallel jobs per partition range.
+
+Q66. Which extensions have you used and why?
+A66. pg_stat_statements (query stats), pg_trgm (fuzzy search), btree_gist
+(exclusion constraints), pgcrypto (hashing/encryption), uuid-ossp or
+built-in gen_random_uuid() (uuidv7() in PG18 for time-ordered ids), ltree
+(hierarchies), hstore, citext, postgis (geospatial), pg_partman (partition
+management), pg_cron, pg_repack, pgaudit, timescaledb (time series),
+pg_hint_plan, plpgsql_check.
+REAL-WORLD: Adopted pg_partman to automate monthly partition creation and
+retention, removing a manual runbook step.
+
+Q67. Other procedural languages: PL/Python, PL/Perl, PL/v8?
+A67. Useful for logic hard to write in SQL (regex, parsing, ML scoring,
+calling libraries). Untrusted variants (plpython3u, plperlu) need superuser
+and can access the OS - restrict tightly. Overhead of language switching;
+keep out of hot paths. Often better done in the application layer unless
+data-local processing is needed.
+REAL-WORLD: Used PL/Python sparingly to validate complex file formats close
+to the data; all else stayed in SQL/PLpgSQL.
+
+Q68. Dependency management and DDL behavior?
+A68. DDL is transactional (rollback a failed migration). PL/pgSQL function
+bodies are not validated against objects at creation (late binding), so
+errors appear at runtime; use plpgsql_check for static analysis. Views
+depend on columns (can't drop/alter type used by a view without
+CASCADE). pg_depend tracks dependencies. CREATE OR REPLACE VIEW can add
+columns at the end only.
+REAL-WORLD: Added plpgsql_check to CI and caught missing columns and
+type mismatches before release.
+
+Q69. Parameter modes, RETURNS TABLE vs OUT parameters?
+A69. IN, OUT, INOUT, VARIADIC. RETURNS TABLE(col type, ...) is shorthand for
+OUT parameters + SETOF. Beware name collisions between OUT column names and
+table columns in the function body (use qualified names or
+#variable_conflict). Large arrays passed by value are copied; prefer
+tables/temp tables for huge inputs.
+REAL-WORLD: Fixed an ambiguous column reference bug in a RETURNS TABLE
+function by prefixing aliases.
+
+Q70. Large objects, bytea, TOAST?
+A70. bytea stores binary in-row/TOAST (up to 1 GB); large objects (lo_*) use
+pg_largeobject with streaming APIs and OID references (extra cleanup via
+vacuumlo/triggers). TOAST automatically compresses/out-of-lines large
+values (>~2KB) - SELECT * on wide TOAST columns costs I/O; select only
+needed columns. For big files, store in object storage and keep metadata/
+URLs in DB.
+REAL-WORLD: Moved PDFs from bytea to S3 with a reference table, shrinking
+the DB by 400 GB and speeding backups.
+
+Q71. Constraints and safe validation on live tables?
+A71. CHECK, UNIQUE, FK, NOT NULL, EXCLUDE. On large tables add as NOT VALID
+(skips scanning existing rows, enforces for new rows) then VALIDATE
+CONSTRAINT later (takes weaker lock). PG: SET NOT NULL scans the table
+unless a validated CHECK (col IS NOT NULL) exists (PG12+ uses it). FK
+columns on child should be indexed.
+REAL-WORLD: Added FK constraints on a 600M-row table with NOT VALID +
+VALIDATE during low traffic: no outage.
+
+Q72. Connection pooling and PgBouncer - what should developers know?
+A72. PostgreSQL uses a process per connection (memory + context switch
+cost), so thousands of direct connections hurt. PgBouncer modes: session,
+transaction (best scaling, but session state such as SET, advisory session
+locks, LISTEN, temp tables and, historically, prepared statements don't
+work reliably), statement. Size pools to cores (roughly 2-4x cores of
+active connections), set timeouts, and avoid long idle-in-transaction.
+REAL-WORLD: Introduced PgBouncer in transaction mode and fixed code that
+relied on session-level SET; max connections dropped from 2000 to 200.
+
+Q73. Slow-by-slow processing - how do you spot and fix it?
+A73. Symptoms: loop with a SQL statement per iteration, huge "calls" count in
+pg_stat_statements with tiny rows, per-row exceptions/commits. Fix with
+single set-based statements, joins in UPDATE ... FROM, window functions,
+batching with arrays, or chunked processing. The fastest loop is the one
+you don't write.
+REAL-WORLD: pg_stat_statements showed a statement with 30M calls per run;
+replaced with one INSERT ... SELECT.
+
+Q74. How do you profile PL/pgSQL?
+A74. track_functions='pl' (pg_stat_user_functions), auto_explain with
+log_nested_statements, plpgsql_check profiler and plprofiler extension
+(line-level), pg_stat_statements with pg_stat_statements.track=all for
+nested statements, plus manual clock_timestamp() timing.
+REAL-WORLD: plprofiler showed 70% of time in a tiny validation function; I
+moved it into a SQL expression.
+
+Q75. How do you unit test and deploy database code?
+A75. pgTAP for unit tests (is(), results_eq(), throws_ok()), migration tools
+(Flyway, Liquibase, sqitch, Alembic) with versioned repeatable scripts,
+CI using Docker/testcontainers, test data fixtures, rollback/forward
+plan, idempotent scripts, checks for lock timeouts, and plpgsql_check in
+pipeline.
+REAL-WORLD: Introduced pgTAP for core pricing functions and a CI pipeline
+that spins up PostgreSQL, applies migrations, runs tests.
+
+Q76. Array/JSON helper pitfalls inside functions?
+A76. Arrays are 1-based; array_append on NULL array returns array with the
+element; unnest of empty array returns zero rows (affects joins - use LEFT
+JOIN/COALESCE); jsonb functions return NULL for missing keys (->>) which
+may be mistaken for JSON null; jsonb_set requires create_missing awareness;
+use jsonb_strip_nulls when needed.
+REAL-WORLD: A report lost rows because unnest(empty array) removed the parent
+row; fixed with LEFT JOIN LATERAL ... ON true.
+
+Q77. Row-Level Security (RLS) from a developer's view?
+A77. ALTER TABLE ... ENABLE ROW LEVEL SECURITY; CREATE POLICY ... USING
+(tenant_id = current_setting('app.tenant')::int) WITH CHECK (...). Policies
+apply to non-owner roles unless FORCE ROW LEVEL SECURITY. Performance:
+policy predicates are added to every query, so index them and keep
+functions LEAKPROOF/simple. Great for multi-tenant isolation.
+REAL-WORLD: Implemented tenant isolation with RLS + set_config at connection
+checkout; eliminated tenant-filter bugs in application code.
+
+Q78. Code review checklist for PL/pgSQL?
+A78. Set-based first; explicit column lists; no SELECT *; parameterized
+dynamic SQL; correct volatility/security labels; search_path pinned for
+SECURITY DEFINER; EXCEPTION blocks only when needed; chunking + commit in
+procedures; indexes for new access paths; lock impact of DDL (lock_timeout);
+logging; tests (pgTAP); idempotent migrations.
+REAL-WORLD: Introduced this checklist in PR templates, reducing production
+rollbacks.
+
+Q79. Common PL/pgSQL gotchas?
+A79. - Variable name vs column name conflict (use qualified names or
+  #variable_conflict).
+  - SELECT INTO with multiple rows: takes first row silently unless STRICT.
+  - FOUND / ROW_COUNT semantics; IF NOT FOUND after SELECT INTO.
+  - NULL in IF/CASE conditions evaluates as not true.
+  - Cached plans inside functions can go stale with changing table shapes
+    or skewed values.
+  - Temp tables inside functions can bloat catalogs when created per call.
+REAL-WORLD: A silent SELECT INTO (non-STRICT) picked an arbitrary row; I
+changed it to STRICT and fixed the duplicate-data root cause.
+
+Q80. How do you design a large data migration job?
+A80. Stage -> validate -> transform -> load. Use COPY and set-based SQL,
+process in key-range chunks with a control table (batch id, status, last
+key) for restartability, parallel workers per partition, disable
+non-essential indexes only if justified, error/reject tables with reason
+codes, reconciliation (row counts, checksums, sums), rehearsal with
+production-sized data, and cutover plan (logical replication or CDC for
+minimal downtime).
+REAL-WORLD: Migrated ~700M rows in a weekend window with restartable chunks
+and signed-off reconciliation reports.
+
+==========================================================================
+ SECTION D: MVCC, TRANSACTIONS, LOCKING, CONCURRENCY
+==========================================================================
+
+Q81. Explain MVCC in PostgreSQL. How is it different from Oracle?
+A81. Each row version (tuple) lives in the heap with xmin (creator xid) and
+xmax (deleter/locker xid). An UPDATE writes a new tuple version and marks the
+old one dead; snapshots decide which versions a transaction can see. Readers
+never block writers. Old versions are cleaned by VACUUM. Oracle instead keeps
+the current version in the block and rebuilds old versions from undo
+(so no table bloat, but ORA-01555). PostgreSQL has no snapshot-too-old
+for normal queries, but bloat and vacuum dependencies instead.
+REAL-WORLD: Explained high update cost on a wide table to the team: every
+update copied the full row; narrowing the table and enabling HOT updates
+cut write amplification.
+
+Q82. Isolation levels in PostgreSQL?
+A82. READ COMMITTED (default; each statement sees a fresh snapshot),
+REPEATABLE READ (transaction-level snapshot; prevents non-repeatable reads
+and phantoms; can fail with "could not serialize access", SQLSTATE 40001),
+SERIALIZABLE (SSI; detects dangerous dependency patterns, may abort with
+40001 - applications must retry). READ UNCOMMITTED behaves as READ COMMITTED
+(no dirty reads).
+REAL-WORLD: Used REPEATABLE READ READ ONLY for multi-query month-end exports
+and SERIALIZABLE with retry logic for a financial allocation routine.
+
+Q83. Row locks and table locks - what should I know?
+A83. Row lock modes: FOR UPDATE, FOR NO KEY UPDATE, FOR SHARE, FOR KEY SHARE
+(FK checks use KEY SHARE), with NOWAIT and SKIP LOCKED options. Table lock
+modes range from ACCESS SHARE (SELECT) to ACCESS EXCLUSIVE (ALTER TABLE,
+VACUUM FULL, DROP). A queued ACCESS EXCLUSIVE request blocks all later
+queries behind it - a common cause of outages during migrations. Always set
+lock_timeout (e.g. 3s) and retry DDL.
+REAL-WORLD: An ALTER TABLE waiting behind a long query froze the app; I
+introduced lock_timeout + retry wrappers for all migrations.
+
+Q84. How do you find blocking sessions and deadlocks?
+A84. pg_stat_activity (wait_event_type = 'Lock'), pg_blocking_pids(pid),
+pg_locks joined to activity. Enable log_lock_waits and deadlock_timeout
+(default 1s). Deadlocks raise SQLSTATE 40P01 and one transaction is aborted;
+the log shows both statements. Prevent with consistent lock ordering,
+short transactions, and indexed foreign keys.
+REAL-WORLD: Deadlocks in an order-update flow disappeared after sorting row
+ids before locking (SELECT ... ORDER BY id FOR UPDATE).
+
+Q85. Lost updates: pessimistic vs optimistic locking?
+A85. Under READ COMMITTED, two read-modify-write cycles can overwrite each
+other. Pessimistic: SELECT ... FOR UPDATE. Optimistic: version column
+(UPDATE ... WHERE id=$1 AND version=$2; check row count) or compare
+xmin::text::bigint cautiously. Atomic SQL (SET qty = qty - 1 WHERE qty > 0)
+avoids read-modify-write entirely.
+REAL-WORLD: Replaced read-then-update inventory logic with a single atomic
+UPDATE ... RETURNING, removing oversells.
+
+Q86. Sequences: gaps, caching, and gap-free numbering?
+A86. Sequences are non-transactional: rollbacks and crashes create gaps;
+CACHE causes per-session ranges and out-of-order values across sessions.
+nextval is never rolled back. Gap-free numbering (invoices) needs a counter
+table updated in the same transaction (serializes writers), accepting the
+concurrency cost. Prefer identity columns; consider uuid (v7 in PG18 or
+application-generated) for distributed ids and index locality.
+REAL-WORLD: Used sequences for surrogate keys and a locked counter table
+only for legally gap-free invoice numbers.
+
+Q87. DEFERRABLE constraints, FK indexing and exclusion constraints?
+A87. DEFERRABLE INITIALLY DEFERRED checks constraints at commit - good for
+circular inserts and bulk loads (only UNIQUE/PK/FK/EXCLUDE can be
+deferrable; NOT NULL/CHECK cannot). PostgreSQL does not auto-index FK
+columns; unindexed child FKs make parent deletes/updates scan the child
+table and lock heavily. Exclusion constraints enforce non-overlap.
+REAL-WORLD: Added missing FK indexes found with a catalog query; slow parent
+deletes dropped from minutes to seconds.
+
+Q88. Transaction ID wraparound and freezing?
+A88. XIDs are 32-bit; after ~2 billion transactions old rows could appear
+"in the future". VACUUM freezes old tuples; autovacuum forces anti-
+wraparound vacuum when age(relfrozenxid) exceeds autovacuum_freeze_max_age
+(200M default). Monitor age(datfrozenxid). Causes of danger: blocked
+vacuum (long transactions, replication slots, prepared transactions),
+disabled autovacuum. At the extreme the DB stops accepting writes.
+REAL-WORLD: Alerted on datfrozenxid age > 1B and found an orphaned
+prepared transaction blocking freezing.
+
+Q89. Build a safe queue-processing table.
+A89. Table: id, payload, status, attempts, locked_at, run_after. Workers:
+  WITH next AS (SELECT id FROM jobs WHERE status='NEW' AND run_after<=now()
+                ORDER BY id LIMIT 10 FOR UPDATE SKIP LOCKED)
+  UPDATE jobs j SET status='RUNNING', locked_at=now()
+  FROM next WHERE j.id=next.id RETURNING j.*;
+Partial index on status='NEW'; handle retries with attempts and dead-letter
+status; reap stuck jobs by locked_at; frequently VACUUM (high churn);
+consider partitions or deleting finished rows. Alternatives: pgmq, LISTEN/
+NOTIFY wakeups, or dedicated brokers at large scale.
+REAL-WORLD: Scaled from 1 to 12 workers linearly with SKIP LOCKED, 4M jobs/day.
+
+Q90. WAL, checkpoints, durability settings, and PITR?
+A90. Every change is written to WAL before data files. Checkpoints flush
+dirty pages; tune max_wal_size/checkpoint_timeout/checkpoint_completion_
+target to smooth I/O. synchronous_commit=off trades up to a few hundred ms of
+commits for speed without corruption risk; fsync=off is dangerous.
+Reduce WAL: batch commits, UNLOGGED tables (not crash-safe, not replicated),
+fewer indexes, wal_compression. PITR: base backup (pg_basebackup/pgBackRest)
++ continuous WAL archiving, restore to any timestamp. Developers should know
+PostgreSQL has no Flashback - recover mistakes via PITR to a side instance.
+REAL-WORLD: Recovered an accidentally deleted table by restoring a PITR
+clone to just before the DELETE and exporting the rows.
+
+==========================================================================
+ SECTION E: DESIGN, ARCHITECTURE & EXPERIENCE
+==========================================================================
+
+Q91. Normalization vs denormalization; relational vs JSONB hybrid?
+A91. OLTP: 3NF to protect integrity. Reporting: star schema or summary
+tables. A hybrid works well: core attributes as typed columns with
+constraints, flexible/sparse attributes in JSONB with GIN or expression
+indexes. Over-using JSONB loses FK integrity, statistics (planner can't
+estimate inside JSONB well), and ease of updates.
+REAL-WORLD: Modeled product catalogs with typed core columns and a JSONB
+attributes column for category-specific fields; promoted hot keys to columns
+as usage grew.
+
+Q92. Declarative partitioning: strategies and limitations?
+A92. RANGE (time), LIST (tenant/region), HASH (even spread), multi-level.
+Unique/PK constraints must include the partition key; no global indexes;
+FKs referencing partitioned tables supported (PG12+). Maintenance:
+ATTACH PARTITION (after matching CHECK constraint to avoid scan),
+DETACH PARTITION CONCURRENTLY (PG14+), default partition, pg_partman for
+automation. Benefits: pruning, fast purge (DROP), parallel maintenance.
+Don't over-partition (thousands hurt planning).
+REAL-WORLD: Converted a 3 TB events table to monthly range partitions;
+retention became a DROP PARTITION job and vacuum times fell dramatically.
+
+Q93. How do you implement Slowly Changing Dimension Type 2?
+A93. Columns: surrogate key, business key, attributes, valid_from, valid_to
+(or tstzrange valid_period), is_current. Detect changes with a hash
+(md5/sha256 of concatenated attributes) or IS DISTINCT FROM. Load in one
+transaction: close current rows (UPDATE ... SET valid_to=now()) for
+changed keys, insert new versions (or MERGE on PG15+). An exclusion
+constraint (business_key WITH =, valid_period WITH &&) prevents overlapping
+versions.
+REAL-WORLD: Loaded a 30M-row customer dimension daily using hash-based
+change detection and exclusion constraint for integrity; ran in minutes.
+
+Q94. Zero/low-downtime schema changes?
+A94. - ADD COLUMN with constant/non-volatile DEFAULT is metadata-only (PG11+).
+  - CREATE INDEX CONCURRENTLY (and REINDEX CONCURRENTLY, PG12+); check for
+    invalid indexes afterwards.
+  - Constraints: NOT VALID then VALIDATE.
+  - Changing types often rewrites the table: use expand/contract (new
+    column, dual write/trigger, backfill in batches, swap, drop).
+  - Always set lock_timeout and retry; keep migrations small.
+  - Large rewrites: pg_repack or logical replication to a new instance.
+REAL-WORLD: Changed an int PK to bigint on a 1B-row table via expand/
+contract with batched backfill and no outage.
+
+Q95. Replication, HA, and read replicas - what should a developer know?
+A95. Streaming (physical) replication: byte-level replica, read-only hot
+standby, async or synchronous; failover via Patroni/repmgr/cloud managed
+services. Logical replication: table-level publish/subscribe (cross-version
+migration, selective data), but DDL and sequences aren't replicated
+automatically and needs replica identity. Developer concerns: replication
+lag (read-your-writes issues), query conflicts on standby (max_standby_
+streaming_delay, hot_standby_feedback trade-offs), route reads carefully,
+idempotent retries after failover.
+REAL-WORLD: Moved reporting to a replica and solved stale reads by routing
+post-write reads to the primary for a short window.
+
+Q96. Security practices as a developer?
+A96. Least privilege roles (group roles, no app as superuser), GRANT on
+schema/function level, REVOKE CREATE on public schema (default in PG15+),
+default privileges, SCRAM-SHA-256 auth, TLS, RLS for multi-tenancy, column-
+level privileges, pgcrypto for hashing, pgaudit for auditing, SECURITY
+DEFINER with pinned search_path, secrets in vaults, masked data in non-
+prod (pg_anonymizer).
+REAL-WORLD: Introduced separate roles (app_rw, app_ro, migrator) with
+default privileges, ending use of the owner account by applications.
+
+Q97. Oracle (or SQL Server) to PostgreSQL migration - key differences?
+A97. Empty string vs NULL; no packages (schemas/extensions); no autonomous
+transactions; no ROWNUM (use LIMIT/row_number); (+) outer joins -> ANSI;
+CONNECT BY -> recursive CTE; sequences/NEXTVAL syntax; DATE type has no time
+in PG; implicit conversions stricter; no hierarchical hints; MERGE since PG15;
+PL/SQL -> PL/pgSQL syntax (BULK COLLECT, %ROWTYPE, exception names);
+transaction control inside procedures only; case-folding of identifiers
+(unquoted names lower-case). Tools: ora2pg, AWS SCT/DMS handle most DDL;
+code needs manual review + side-by-side result comparison.
+REAL-WORLD: Built a comparison harness executing identical queries on both
+engines and diffing results to certify parity before cutover.
+
+Q98. Tell me about a critical production incident you resolved.
+A98. (Use STAR: Situation, Task, Action, Result.) Example:
+  S: API latency jumped from 50 ms to 5 s at peak; connections maxed out.
+  T: Restore service quickly, find root cause.
+  A: pg_stat_activity showed many sessions waiting on a lock held by an
+     "idle in transaction" session from a stuck migration job; terminated
+     it (pg_terminate_backend), then found the migration's ALTER TABLE had
+     queued ACCESS EXCLUSIVE behind a long report, blocking everything.
+  R: Service restored in 10 minutes. Prevention: lock_timeout + retry in
+     migrations, idle_in_transaction_session_timeout, statement_timeout for
+     report roles, alert on lock waits > 30s.
+Interviewers want a calm method, correct tools, and prevention steps.
+
+Q99. How do you mentor juniors and enforce standards?
+A99. Written SQL/PLpgSQL standards, PR checklists, EXPLAIN-review sessions
+("bring your slow query"), reusable templates (migration, logging, error
+handling), CI checks (plpgsql_check, pgTAP, sqlfluff linting), shared
+runbooks (locks, vacuum, bloat, slow query), and blameless post-mortems.
+REAL-WORLD: Introduced mandatory EXPLAIN output in PRs touching big tables;
+caught several missing indexes before release.
+
+Q100. Describe the most complex database solution you designed. (Template)
+A100. Structure your answer:
+  1) Business problem and scale (rows, GB, TPS, SLA, users).
+  2) Architecture: schema, partitioning, indexing, APIs, replicas, pooling.
+  3) Key decisions and trade-offs (ON CONFLICT vs MERGE, MV vs summary
+     table, trigger vs application code, JSONB vs columns).
+  4) Performance results with numbers (before/after).
+  5) Reliability: error handling, retries, monitoring, backups, PITR tested.
+  6) Lessons learned and what you'd do differently.
+Example: "Designed an event-processing platform ingesting 80M rows/day:
+monthly range partitions with pg_partman, COPY into unlogged staging, batched
+ON CONFLICT upserts, BRIN + partial indexes, PgBouncer, read replica for
+reporting, and SKIP LOCKED workers. P95 query latency went from 3s to 120ms;
+nightly processing from 6h to 45 minutes; no data loss across two failovers."
+
+==========================================================================
+ BONUS: QUICK TIPS FOR THE INTERVIEW
+==========================================================================
+- Always mention trade-offs ("it depends on data volume, concurrency and skew").
+- Quote numbers: row counts, table sizes, before/after runtimes.
+- Prove claims with tools: EXPLAIN (ANALYZE, BUFFERS), pg_stat_statements,
+  pg_stat_activity, auto_explain, pg_locks.
+- Know MVCC, vacuum, and locking deeply - they are the core of senior
+  PostgreSQL interviews.
+- Know what is version-dependent (MERGE PG15, JSON_TABLE PG17, skip scan
+  PG18) and state the version you used in production.
+- Be ready to write on a whiteboard: DISTINCT ON, top-N per group with LATERAL,
+  running total, gaps and islands, ON CONFLICT upsert, SKIP LOCKED queue.
+- Prepare 2-3 real stories: a tuning win, an incident, a design decision you
+  would change.
+- Replace the sample numbers in REAL-WORLD lines with your own project facts.
+
+                              -- END OF DOCUMENT --

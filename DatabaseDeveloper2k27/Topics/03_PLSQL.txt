@@ -1,0 +1,1029 @@
+ORACLE PL/SQL – COMPLETE MASTER CHECKLIST
+==================================================
+LEVEL: BEGINNER TO ADVANCED
+FOCUS: ORACLE DATABASE DEVELOPER / DATABASE ENGINEER
+
+1. PL/SQL FUNDAMENTALS
+----------------------
+[ ] Introduction to PL/SQL
+[ ] SQL vs PL/SQL
+[ ] Features and advantages of PL/SQL
+[ ] PL/SQL architecture
+[ ] PL/SQL execution engine
+[ ] SQL engine vs PL/SQL engine
+[ ] Context switching between SQL and PL/SQL
+[ ] PL/SQL block structure
+[ ] Anonymous PL/SQL blocks
+[ ] Named PL/SQL blocks
+[ ] DECLARE section
+[ ] BEGIN section
+[ ] EXCEPTION section
+[ ] END section
+[ ] Nested PL/SQL blocks
+[ ] Block labels
+[ ] PL/SQL statement terminators
+[ ] Comments: single-line and multi-line
+[ ] DBMS_OUTPUT.PUT_LINE
+[ ] SET SERVEROUTPUT ON
+[ ] SQL*Plus and SQL Developer execution
+
+2. VARIABLES, CONSTANTS AND DATA TYPES
+--------------------------------------
+[ ] Variable declaration
+[ ] Variable initialization
+[ ] Variable assignment
+[ ] Constants using CONSTANT
+[ ] NOT NULL variables
+[ ] Scalar data types
+[ ] NUMBER
+[ ] PLS_INTEGER and BINARY_INTEGER
+[ ] SIMPLE_INTEGER
+[ ] VARCHAR2
+[ ] CHAR and NCHAR
+[ ] DATE
+[ ] TIMESTAMP
+[ ] BOOLEAN
+[ ] RAW and LONG RAW
+[ ] LOB data types: CLOB, NCLOB, BLOB, BFILE
+[ ] Composite data types
+[ ] User-defined data types
+[ ] Anchored data types
+[ ] %TYPE attribute
+[ ] %ROWTYPE attribute
+[ ] Record variables
+[ ] Subtypes
+[ ] NULL values
+[ ] Implicit type conversion
+[ ] Explicit type conversion
+[ ] Scope and lifetime of variables
+[ ] Variable naming conventions
+
+3. OPERATORS AND EXPRESSIONS
+----------------------------
+[ ] Arithmetic operators
+[ ] Relational operators
+[ ] Logical operators
+[ ] Assignment operator
+[ ] Concatenation operator
+[ ] Exponentiation operator
+[ ] Comparison operators
+[ ] Boolean expressions
+[ ] Operator precedence
+[ ] NULL comparisons
+[ ] IS NULL and IS NOT NULL
+[ ] IN and NOT IN
+[ ] BETWEEN
+[ ] LIKE
+[ ] SQL expressions inside PL/SQL
+[ ] CASE expressions
+[ ] Boolean conditions
+
+4. CONDITIONAL CONTROL STATEMENTS
+--------------------------------
+[ ] IF THEN
+[ ] IF THEN ELSE
+[ ] IF THEN ELSIF
+[ ] Nested IF statements
+[ ] Simple CASE statement
+[ ] Searched CASE statement
+[ ] CASE expressions
+[ ] NULL condition handling
+[ ] Boolean conditions
+[ ] Conditional execution patterns
+
+5. ITERATIVE CONTROL STATEMENTS
+-------------------------------
+[ ] Basic LOOP
+[ ] WHILE LOOP
+[ ] FOR LOOP
+[ ] Numeric FOR LOOP
+[ ] Reverse FOR LOOP
+[ ] Nested loops
+[ ] EXIT statement
+[ ] EXIT WHEN
+[ ] CONTINUE statement
+[ ] CONTINUE WHEN
+[ ] GOTO statement and restrictions
+[ ] NULL statement
+[ ] Loop labels
+[ ] Infinite loop prevention
+[ ] Loop optimization
+
+6. SQL STATEMENTS INSIDE PL/SQL
+-------------------------------
+[ ] SELECT INTO
+[ ] INSERT
+[ ] UPDATE
+[ ] DELETE
+[ ] MERGE
+[ ] COMMIT
+[ ] ROLLBACK
+[ ] SAVEPOINT
+[ ] Transaction control
+[ ] SQL statements with variables
+[ ] SQL statements with expressions
+[ ] SQL statements with subqueries
+[ ] SQL statements with joins
+[ ] SQL statements with aggregate functions
+[ ] SQL statements with GROUP BY and HAVING
+[ ] SQL statements with analytic functions
+[ ] DML with RETURNING INTO
+[ ] SQL%ROWCOUNT
+[ ] SQL%FOUND
+[ ] SQL%NOTFOUND
+[ ] SQL%ISOPEN
+[ ] SQL implicit cursor attributes
+[ ] Handling SELECT INTO with zero rows
+[ ] Handling SELECT INTO with multiple rows
+[ ] SELECT INTO vs cursor
+[ ] DML error handling
+
+7. CURSORS
+----------
+[ ] Introduction to cursors
+[ ] SQL cursor concepts
+[ ] Implicit cursors
+[ ] Explicit cursors
+[ ] Cursor declaration
+[ ] Cursor opening
+[ ] Cursor fetching
+[ ] Cursor closing
+[ ] Cursor lifecycle
+[ ] Cursor attributes
+[ ] %FOUND
+[ ] %NOTFOUND
+[ ] %ROWCOUNT
+[ ] %ISOPEN
+[ ] Cursor FOR LOOP
+[ ] Parameterized cursors
+[ ] Cursor parameters
+[ ] Cursor variables
+[ ] REF CURSOR
+[ ] Strong REF CURSOR
+[ ] Weak REF CURSOR
+[ ] SYS_REFCURSOR
+[ ] OPEN FOR
+[ ] FETCH from REF CURSOR
+[ ] CLOSE REF CURSOR
+[ ] Passing REF CURSOR between procedures
+[ ] Returning REF CURSOR from functions
+[ ] Multiple REF CURSOR outputs
+[ ] Cursor with joins
+[ ] Cursor with subqueries
+[ ] Cursor with dynamic SQL
+[ ] Cursor FOR UPDATE
+[ ] WHERE CURRENT OF
+[ ] NOWAIT and WAIT with locking
+[ ] Cursor memory considerations
+[ ] Cursor performance optimization
+[ ] Cursor vs BULK COLLECT
+[ ] Cursor vs SELECT INTO
+
+8. RECORDS AND COMPOSITE DATA TYPES
+-----------------------------------
+[ ] Record concepts
+[ ] User-defined records
+[ ] RECORD declaration
+[ ] Record field access
+[ ] Record assignment
+[ ] %ROWTYPE records
+[ ] Table-based records
+[ ] Cursor-based records
+[ ] Nested records
+[ ] Records as procedure parameters
+[ ] Records as function parameters
+[ ] Records with collections
+[ ] Record initialization
+[ ] Record comparison limitations
+[ ] Record-based processing
+
+9. COLLECTIONS
+--------------
+[ ] Collection concepts
+[ ] Collection types
+[ ] Associative arrays
+[ ] Index-by tables
+[ ] Nested tables
+[ ] VARRAY
+[ ] Collection declaration
+[ ] Collection initialization
+[ ] Collection constructors
+[ ] Collection assignment
+[ ] Collection methods
+[ ] COUNT
+[ ] FIRST
+[ ] LAST
+[ ] PRIOR
+[ ] NEXT
+[ ] EXISTS
+[ ] EXTEND
+[ ] TRIM
+[ ] DELETE
+[ ] LIMIT
+[ ] Collection traversal
+[ ] Sparse collections
+[ ] Dense collections
+[ ] Collection of records
+[ ] Collection of objects
+[ ] Multidimensional collections
+[ ] Nested collections
+[ ] Collections as procedure parameters
+[ ] Collections as function return types
+[ ] Collections with SQL
+[ ] TABLE operator
+[ ] CAST and MULTISET
+[ ] SQL nested table types
+[ ] Associative array limitations in SQL
+[ ] Collection performance and memory
+
+10. EXCEPTION HANDLING
+----------------------
+[ ] Exception handling fundamentals
+[ ] EXCEPTION section
+[ ] Predefined exceptions
+[ ] NO_DATA_FOUND
+[ ] TOO_MANY_ROWS
+[ ] ZERO_DIVIDE
+[ ] DUP_VAL_ON_INDEX
+[ ] INVALID_NUMBER
+[ ] VALUE_ERROR
+[ ] CURSOR_ALREADY_OPEN
+[ ] INVALID_CURSOR
+[ ] STORAGE_ERROR
+[ ] PROGRAM_ERROR
+[ ] TIMEOUT_ON_RESOURCE
+[ ] User-defined exceptions
+[ ] Exception declaration
+[ ] RAISE statement
+[ ] RAISE_APPLICATION_ERROR
+[ ] PRAGMA EXCEPTION_INIT
+[ ] SQLCODE
+[ ] SQLERRM
+[ ] Exception propagation
+[ ] Exception scope
+[ ] Nested block exception handling
+[ ] WHEN OTHERS
+[ ] Exception re-raising
+[ ] Exception handling in procedures
+[ ] Exception handling in functions
+[ ] Exception handling in triggers
+[ ] Exception handling in dynamic SQL
+[ ] Error logging
+[ ] Error logging using custom tables
+[ ] DBMS_UTILITY.FORMAT_ERROR_STACK
+[ ] DBMS_UTILITY.FORMAT_ERROR_BACKTRACE
+[ ] UTL_CALL_STACK
+[ ] Best practices for exception handling
+[ ] Avoiding swallowed exceptions
+
+11. PROCEDURES
+--------------
+[ ] Stored procedure concepts
+[ ] CREATE PROCEDURE
+[ ] Procedure syntax
+[ ] Procedure compilation
+[ ] Procedure execution
+[ ] EXEC and EXECUTE
+[ ] Calling procedures from PL/SQL
+[ ] Calling procedures from SQL clients
+[ ] IN parameters
+[ ] OUT parameters
+[ ] IN OUT parameters
+[ ] Default parameter values
+[ ] Positional parameter notation
+[ ] Named parameter notation
+[ ] Mixed parameter notation
+[ ] Parameter data types
+[ ] Passing records
+[ ] Passing collections
+[ ] Passing REF CURSOR
+[ ] Nested procedures
+[ ] Local procedures
+[ ] Standalone procedures
+[ ] Procedure dependencies
+[ ] Invalid procedures
+[ ] Recompilation
+[ ] DROP and REPLACE procedures
+[ ] Procedure overloading
+[ ] Procedure privileges
+[ ] AUTHID DEFINER
+[ ] AUTHID CURRENT_USER
+[ ] Procedure exception handling
+[ ] Procedure performance optimization
+
+12. FUNCTIONS
+-------------
+[ ] Stored function concepts
+[ ] CREATE FUNCTION
+[ ] Function syntax
+[ ] RETURN statement
+[ ] Return data types
+[ ] Function parameters
+[ ] IN parameters
+[ ] Default parameter values
+[ ] Scalar functions
+[ ] Functions returning records
+[ ] Functions returning collections
+[ ] Pipelined table functions
+[ ] Functions returning REF CURSOR
+[ ] Functions called from PL/SQL
+[ ] Functions called from SQL
+[ ] Deterministic functions
+[ ] RESULT_CACHE functions
+[ ] Function purity concepts
+[ ] Side effects and SQL-callable restrictions
+[ ] PRAGMA UDF
+[ ] Function overloading
+[ ] Function dependencies
+[ ] Function privileges
+[ ] AUTHID DEFINER
+[ ] AUTHID CURRENT_USER
+[ ] Function exception handling
+[ ] Function performance optimization
+[ ] Procedure vs function
+[ ] SQL function vs PL/SQL function
+
+13. PACKAGES
+------------
+[ ] Package concepts
+[ ] Package specification
+[ ] Package body
+[ ] CREATE PACKAGE
+[ ] CREATE PACKAGE BODY
+[ ] Public declarations
+[ ] Private declarations
+[ ] Package variables
+[ ] Package constants
+[ ] Package cursors
+[ ] Package procedures
+[ ] Package functions
+[ ] Package types and records
+[ ] Package collections
+[ ] Package initialization section
+[ ] Package state
+[ ] Package instantiation
+[ ] Package session state
+[ ] Package overloading
+[ ] Forward declarations
+[ ] Package dependencies
+[ ] Package invalidation
+[ ] Package recompilation
+[ ] Stateful vs stateless packages
+[ ] SERIALLY_REUSABLE packages
+[ ] Package privileges
+[ ] Package security
+[ ] AUTHID in packages
+[ ] Standard Oracle packages
+[ ] DBMS_OUTPUT
+[ ] DBMS_SQL
+[ ] DBMS_UTILITY
+[ ] DBMS_LOCK
+[ ] DBMS_SCHEDULER
+[ ] DBMS_STATS
+[ ] DBMS_METADATA
+[ ] UTL_FILE
+[ ] UTL_HTTP
+[ ] DBMS_CRYPTO
+[ ] DBMS_APPLICATION_INFO
+[ ] DBMS_ERRLOG
+[ ] DBMS_PARALLEL_EXECUTE
+
+14. TRIGGERS
+------------
+[ ] Trigger concepts
+[ ] Trigger architecture
+[ ] CREATE TRIGGER
+[ ] BEFORE triggers
+[ ] AFTER triggers
+[ ] INSTEAD OF triggers
+[ ] DML triggers
+[ ] INSERT triggers
+[ ] UPDATE triggers
+[ ] DELETE triggers
+[ ] Row-level triggers
+[ ] Statement-level triggers
+[ ] FOR EACH ROW
+[ ] :OLD and :NEW
+[ ] Conditional predicates: INSERTING, UPDATING, DELETING
+[ ] Column-specific triggers
+[ ] UPDATE OF column
+[ ] BEFORE STATEMENT
+[ ] AFTER STATEMENT
+[ ] Compound triggers
+[ ] Instead-of triggers on views
+[ ] Schema-level triggers
+[ ] Database-level triggers
+[ ] DDL triggers
+[ ] LOGON triggers
+[ ] LOGOFF triggers
+[ ] Startup and shutdown triggers
+[ ] System event triggers
+[ ] Trigger execution order
+[ ] Trigger dependencies
+[ ] Trigger invalidation
+[ ] Mutating table error
+[ ] ORA-04091
+[ ] Compound trigger solution
+[ ] Autonomous transaction in triggers
+[ ] Trigger recursion
+[ ] Trigger disabling and enabling
+[ ] Trigger compilation
+[ ] Trigger exception handling
+[ ] Trigger performance
+[ ] Trigger auditing use cases
+[ ] Trigger vs procedure
+[ ] Trigger vs application logic
+[ ] Trigger best practices
+
+15. DYNAMIC SQL
+---------------
+[ ] Dynamic SQL concepts
+[ ] Static SQL vs dynamic SQL
+[ ] Native Dynamic SQL
+[ ] EXECUTE IMMEDIATE
+[ ] Dynamic SELECT statements
+[ ] Dynamic INSERT statements
+[ ] Dynamic UPDATE statements
+[ ] Dynamic DELETE statements
+[ ] Dynamic DDL statements
+[ ] USING clause
+[ ] INTO clause
+[ ] BULK COLLECT INTO
+[ ] RETURNING INTO
+[ ] Dynamic SQL with bind variables
+[ ] Dynamic SQL with multiple parameters
+[ ] Dynamic SQL with collections
+[ ] Dynamic SQL with records
+[ ] Dynamic SQL with REF CURSOR
+[ ] OPEN FOR dynamic query
+[ ] DBMS_SQL package
+[ ] DBMS_SQL.PARSE
+[ ] DBMS_SQL.BIND_VARIABLE
+[ ] DBMS_SQL.EXECUTE
+[ ] DBMS_SQL.DEFINE_COLUMN
+[ ] DBMS_SQL.COLUMN_VALUE
+[ ] DBMS_SQL.FETCH_ROWS
+[ ] DBMS_SQL.TO_REFCURSOR
+[ ] DBMS_SQL.RETURN_RESULT
+[ ] DBMS_SQL vs EXECUTE IMMEDIATE
+[ ] Dynamic object names
+[ ] Dynamic table and column names
+[ ] Dynamic SQL validation
+[ ] DBMS_ASSERT
+[ ] SQL injection risks
+[ ] Bind variables and security
+[ ] Dynamic SQL performance
+[ ] Dynamic SQL debugging
+
+16. BULK PROCESSING
+-------------------
+[ ] Row-by-row processing
+[ ] Row-by-row context switching
+[ ] Context switching overhead
+[ ] Bulk processing concepts
+[ ] BULK COLLECT
+[ ] BULK COLLECT INTO collection
+[ ] BULK COLLECT with cursor
+[ ] BULK COLLECT with LIMIT
+[ ] FETCH BULK COLLECT
+[ ] FORALL statement
+[ ] FORALL with INSERT
+[ ] FORALL with UPDATE
+[ ] FORALL with DELETE
+[ ] INDICES OF
+[ ] VALUES OF
+[ ] SAVE EXCEPTIONS
+[ ] SQL%BULK_ROWCOUNT
+[ ] SQL%BULK_EXCEPTIONS
+[ ] SQL%BULK_ROWCOUNT(i)
+[ ] SQL%BULK_EXCEPTIONS(i).ERROR_CODE
+[ ] SQL%BULK_EXCEPTIONS(i).ERROR_INDEX
+[ ] Error handling in FORALL
+[ ] Sparse collection processing
+[ ] Bulk collect vs cursor loops
+[ ] FORALL vs conventional DML
+[ ] Memory management with LIMIT
+[ ] Bulk processing best practices
+[ ] Bulk processing real-world scenarios
+
+17. TRANSACTIONS AND CONCURRENCY
+--------------------------------
+[ ] Transaction concepts
+[ ] ACID properties
+[ ] COMMIT
+[ ] ROLLBACK
+[ ] SAVEPOINT
+[ ] ROLLBACK TO SAVEPOINT
+[ ] Implicit commits
+[ ] DDL transaction behavior
+[ ] Transaction boundaries
+[ ] Autocommit behavior
+[ ] Read consistency
+[ ] Transaction isolation
+[ ] READ COMMITTED
+[ ] SERIALIZABLE
+[ ] SELECT FOR UPDATE
+[ ] NOWAIT
+[ ] WAIT
+[ ] SKIP LOCKED
+[ ] Row-level locking
+[ ] Table-level locking
+[ ] Lock contention
+[ ] Deadlocks
+[ ] ORA-00060
+[ ] Lock troubleshooting
+[ ] V$LOCK
+[ ] V$SESSION
+[ ] V$LOCKED_OBJECT
+[ ] DBMS_LOCK
+[ ] Autonomous transactions
+[ ] Transaction management best practices
+[ ] Distributed transactions
+[ ] Two-phase commit basics
+[ ] DB links and distributed DML
+[ ] In-doubt transactions
+
+18. PERFORMANCE TUNING AND OPTIMIZATION
+---------------------------------------
+[ ] PL/SQL performance fundamentals
+[ ] SQL vs PL/SQL performance
+[ ] Context switching optimization
+[ ] Row-by-row processing problems
+[ ] Bulk processing optimization
+[ ] Cursor optimization
+[ ] Collection optimization
+[ ] SQL query optimization
+[ ] Execution plans
+[ ] EXPLAIN PLAN
+[ ] DBMS_XPLAN
+[ ] DBMS_XPLAN.DISPLAY
+[ ] DBMS_XPLAN.DISPLAY_CURSOR
+[ ] Actual vs estimated execution plans
+[ ] Cost-based optimizer basics
+[ ] Optimizer statistics
+[ ] DBMS_STATS
+[ ] Bind variables
+[ ] Hard parsing vs soft parsing
+[ ] Cursor sharing
+[ ] Bind peeking
+[ ] Adaptive cursor sharing
+[ ] PL/SQL compiler optimization
+[ ] PLSQL_OPTIMIZE_LEVEL
+[ ] Native compilation
+[ ] NOCOPY parameter hint
+[ ] PRAGMA UDF
+[ ] RESULT_CACHE
+[ ] Function-based indexes
+[ ] Avoiding unnecessary loops
+[ ] Avoiding repeated SQL execution
+[ ] Efficient exception handling
+[ ] Memory usage optimization
+[ ] PGA considerations
+[ ] SGA considerations
+[ ] SQL and PL/SQL profiling
+[ ] DBMS_HPROF
+[ ] DBMS_PROFILER
+[ ] SQL Trace
+[ ] TKPROF
+[ ] AWR and ASH concepts
+[ ] ADDM concepts
+[ ] Wait events
+[ ] Latch and mutex basics
+[ ] Performance troubleshooting
+
+19. MEMORY MANAGEMENT
+---------------------
+[ ] PL/SQL memory architecture
+[ ] PGA memory
+[ ] UGA memory
+[ ] SGA overview
+[ ] Session memory
+[ ] Collection memory usage
+[ ] Cursor memory usage
+[ ] Package state memory
+[ ] Memory leaks and memory pressure
+[ ] PGA usage monitoring
+[ ] Large collection handling
+[ ] BULK COLLECT LIMIT
+[ ] Memory-efficient processing
+[ ] LOB locator and LOB memory concepts
+
+20. LOB HANDLING
+---------------
+[ ] LOB data types
+[ ] BLOB
+[ ] CLOB
+[ ] NCLOB
+[ ] BFILE
+[ ] Internal vs external LOB
+[ ] LOB locators
+[ ] DBMS_LOB package
+[ ] DBMS_LOB.GETLENGTH
+[ ] DBMS_LOB.SUBSTR
+[ ] DBMS_LOB.READ
+[ ] DBMS_LOB.WRITE
+[ ] DBMS_LOB.WRITEAPPEND
+[ ] DBMS_LOB.COPY
+[ ] DBMS_LOB.TRIM
+[ ] DBMS_LOB.ERASE
+[ ] DBMS_LOB.COMPARE
+[ ] Temporary LOBs
+[ ] Persistent LOBs
+[ ] Temporary LOB creation and freeing
+[ ] BFILE operations
+[ ] File access using DIRECTORY objects
+[ ] LOB performance considerations
+[ ] Large file processing
+[ ] LOB error handling
+
+21. FILE HANDLING AND EXTERNAL INTEGRATION
+------------------------------------------
+[ ] UTL_FILE package
+[ ] DIRECTORY objects
+[ ] CREATE DIRECTORY
+[ ] Directory privileges
+[ ] FOPEN
+[ ] FCLOSE
+[ ] GET_LINE
+[ ] PUT_LINE
+[ ] PUT
+[ ] NEW_LINE
+[ ] FFLUSH
+[ ] IS_OPEN
+[ ] FGETATTR
+[ ] FREMOVE
+[ ] FRENAME
+[ ] File read operations
+[ ] File write operations
+[ ] CSV file processing
+[ ] Text file processing
+[ ] File validation
+[ ] File exception handling
+[ ] External table concepts
+[ ] UTL_HTTP basics
+[ ] HTTP request and response
+[ ] REST API integration
+[ ] JSON processing
+[ ] XML processing
+[ ] XMLTYPE
+[ ] XMLTABLE
+[ ] JSON_OBJECT
+[ ] JSON_ARRAY
+[ ] JSON_VALUE
+[ ] JSON_QUERY
+[ ] JSON_TABLE
+[ ] JSON serialization and parsing
+
+22. SCHEDULING AND AUTOMATION
+----------------------------
+[ ] DBMS_SCHEDULER
+[ ] Scheduler architecture
+[ ] CREATE_JOB
+[ ] Job actions
+[ ] Job types
+[ ] PL/SQL block jobs
+[ ] Stored procedure jobs
+[ ] Executable jobs
+[ ] Scheduler programs
+[ ] Scheduler schedules
+[ ] Scheduler windows
+[ ] Job repeat intervals
+[ ] Calendar expressions
+[ ] Start date and end date
+[ ] Job frequency
+[ ] Job arguments
+[ ] Job classes
+[ ] Job priorities
+[ ] Job chains
+[ ] Job steps
+[ ] Job dependencies
+[ ] Job events
+[ ] Job logging
+[ ] Job run details
+[ ] ENABLE and DISABLE jobs
+[ ] STOP_JOB
+[ ] DROP_JOB
+[ ] RUN_JOB
+[ ] Scheduler failure handling
+[ ] Retry strategies
+[ ] DBMS_JOB legacy concepts
+[ ] DBMS_SCHEDULER vs DBMS_JOB
+[ ] Production job monitoring
+
+23. SECURITY AND PRIVILEGES
+---------------------------
+[ ] PL/SQL security concepts
+[ ] Users and schemas
+[ ] System privileges
+[ ] Object privileges
+[ ] Roles and role privileges
+[ ] EXECUTE privilege
+[ ] AUTHID DEFINER
+[ ] AUTHID CURRENT_USER
+[ ] Definer rights
+[ ] Invoker rights
+[ ] Code-based access control
+[ ] Secure application roles
+[ ] Granting procedure execution
+[ ] Direct grants vs role grants
+[ ] SQL injection prevention
+[ ] Bind variable security
+[ ] DBMS_ASSERT
+[ ] Dynamic SQL validation
+[ ] VPD basics
+[ ] Fine-grained access control
+[ ] DBMS_RLS
+[ ] Data masking concepts
+[ ] TDE concepts
+[ ] DBMS_CRYPTO
+[ ] Encryption and decryption
+[ ] Hashing
+[ ] Password handling
+[ ] Auditing
+[ ] Unified auditing concepts
+[ ] Least privilege principle
+[ ] Secure coding practices
+
+24. ERROR LOGGING AND DEBUGGING
+-------------------------------
+[ ] SQL Developer debugger
+[ ] Breakpoints
+[ ] Step into
+[ ] Step over
+[ ] Step out
+[ ] Watches and variable inspection
+[ ] Debugging stored procedures
+[ ] Debugging functions
+[ ] Debugging packages
+[ ] Debugging triggers
+[ ] DBMS_OUTPUT debugging
+[ ] SQLCODE and SQLERRM
+[ ] FORMAT_ERROR_STACK
+[ ] FORMAT_ERROR_BACKTRACE
+[ ] UTL_CALL_STACK
+[ ] Custom error logging tables
+[ ] Error logging procedures
+[ ] DBMS_ERRLOG
+[ ] LOG ERRORS clause
+[ ] Error logging with bulk DML
+[ ] Exception tracking
+[ ] Production issue analysis
+[ ] Reproducing production errors
+[ ] Root cause analysis
+[ ] Debugging invalid objects
+
+25. PL/SQL ADVANCED FEATURES
+----------------------------
+[ ] Object types
+[ ] Object type specifications
+[ ] Object type bodies
+[ ] Member methods
+[ ] Static methods
+[ ] Constructors
+[ ] Inheritance in object types
+[ ] Object tables
+[ ] Nested table storage
+[ ] Pipelined table functions
+[ ] PIPE ROW
+[ ] PARALLEL_ENABLE
+[ ] REF CURSOR return patterns
+[ ] Polymorphic table functions concepts
+[ ] Table SQL macros
+[ ] Scalar SQL macros
+[ ] PRAGMA AUTONOMOUS_TRANSACTION
+[ ] PRAGMA EXCEPTION_INIT
+[ ] PRAGMA RESTRICT_REFERENCES (legacy concepts)
+[ ] PRAGMA SERIALLY_REUSABLE
+[ ] PRAGMA UDF
+[ ] RESULT_CACHE
+[ ] Deterministic functions
+[ ] Conditional compilation
+[ ] $IF and $THEN
+[ ] DBMS_PREPROCESSOR
+[ ] Edition-based redefinition concepts
+[ ] Invoker-rights and definer-rights interactions
+
+26. ORACLE DATA DICTIONARY AND SYSTEM VIEWS
+-------------------------------------------
+[ ] USER_OBJECTS
+[ ] ALL_OBJECTS
+[ ] DBA_OBJECTS
+[ ] USER_SOURCE
+[ ] ALL_SOURCE
+[ ] DBA_SOURCE
+[ ] USER_ERRORS
+[ ] ALL_ERRORS
+[ ] DBA_ERRORS
+[ ] USER_PROCEDURES
+[ ] USER_ARGUMENTS
+[ ] USER_DEPENDENCIES
+[ ] USER_TAB_COLUMNS
+[ ] USER_TABLES
+[ ] USER_VIEWS
+[ ] USER_TRIGGERS
+[ ] USER_SEQUENCES
+[ ] USER_SYNONYMS
+[ ] USER_CONSTRAINTS
+[ ] USER_INDEXES
+[ ] USER_IND_COLUMNS
+[ ] USER_SCHEDULER_JOBS
+[ ] USER_SCHEDULER_JOB_RUN_DETAILS
+[ ] V$SESSION
+[ ] V$SQL
+[ ] V$SQLAREA
+[ ] V$LOCK
+[ ] V$LOCKED_OBJECT
+[ ] V$PROCESS
+[ ] V$TRANSACTION
+[ ] V$OPEN_CURSOR
+[ ] DBA_HIST_SQLSTAT
+[ ] DBA_HIST_ACTIVE_SESS_HISTORY
+[ ] DBA_SOURCE and source inspection
+[ ] Finding invalid objects
+[ ] Finding dependencies
+[ ] Finding compilation errors
+
+27. PL/SQL DEVELOPMENT TOOLS
+----------------------------
+[ ] Oracle SQL Developer
+[ ] SQL*Plus
+[ ] SQLcl
+[ ] TOAD for Oracle
+[ ] PL/SQL Developer
+[ ] Oracle database connection setup
+[ ] Creating and managing connections
+[ ] Running SQL scripts
+[ ] Running PL/SQL blocks
+[ ] Compiling objects
+[ ] Debugging objects
+[ ] Exporting DDL
+[ ] Importing DDL
+[ ] Schema comparison
+[ ] Source code comparison
+[ ] Git version control
+[ ] Database deployment scripts
+[ ] SQLcl scripting
+[ ] Liquibase basics
+[ ] Flyway basics
+[ ] CI/CD for database code
+
+28. PL/SQL CODING STANDARDS AND BEST PRACTICES
+----------------------------------------------
+[ ] Naming conventions
+[ ] Consistent formatting
+[ ] Meaningful variable names
+[ ] Meaningful procedure and function names
+[ ] Package design standards
+[ ] Modular programming
+[ ] Reusable code
+[ ] Separation of concerns
+[ ] Avoiding duplicate code
+[ ] Avoiding hardcoded values
+[ ] Constants and configuration tables
+[ ] Proper exception handling
+[ ] Avoiding WHEN OTHERS without re-raise/logging
+[ ] Avoiding unnecessary COMMIT inside procedures
+[ ] Transaction ownership
+[ ] Avoiding unnecessary autonomous transactions
+[ ] Avoiding row-by-row processing
+[ ] Bulk processing where appropriate
+[ ] Bind variables
+[ ] Secure dynamic SQL
+[ ] Efficient cursor management
+[ ] Resource cleanup
+[ ] Avoiding unnecessary triggers
+[ ] Code documentation
+[ ] Code reviews
+[ ] Unit testing
+[ ] Integration testing
+[ ] Regression testing
+[ ] Test data management
+[ ] Deployment and rollback strategy
+
+29. REAL-WORLD PL/SQL DEVELOPMENT SCENARIOS
+-------------------------------------------
+[ ] Employee and department management
+[ ] Salary calculation procedure
+[ ] Payroll processing
+[ ] Monthly financial report generation
+[ ] Data validation procedure
+[ ] Duplicate data detection and cleanup
+[ ] Bulk data load procedure
+[ ] Staging-to-target data movement
+[ ] ETL control table design
+[ ] ETL audit logging
+[ ] Error logging framework
+[ ] Data reconciliation procedure
+[ ] Data migration framework
+[ ] Oracle-to-PostgreSQL migration considerations
+[ ] Encryption and decryption implementation
+[ ] File-based data import
+[ ] CSV export
+[ ] Automated report generation
+[ ] Scheduler-based batch processing
+[ ] Incremental data loading
+[ ] Slowly changing dimension processing
+[ ] Transaction reconciliation
+[ ] Audit trail implementation
+[ ] Trigger-based history tracking
+[ ] Dynamic report generation
+[ ] Dynamic table and column processing
+[ ] Large-volume data processing
+[ ] Restartable batch jobs
+[ ] Idempotent processing
+[ ] Error recovery and retry handling
+[ ] Production issue troubleshooting
+
+30. PL/SQL INTERVIEW AND PROBLEM-SOLVING
+---------------------------------------
+[ ] Anonymous block coding questions
+[ ] IF and LOOP coding questions
+[ ] Cursor-based coding questions
+[ ] Explicit vs implicit cursor questions
+[ ] REF CURSOR questions
+[ ] Strong vs weak REF CURSOR questions
+[ ] Procedure vs function questions
+[ ] Package specification vs body questions
+[ ] Trigger types and execution questions
+[ ] Mutating table error questions
+[ ] Exception handling questions
+[ ] RAISE vs RAISE_APPLICATION_ERROR
+[ ] SQLCODE vs SQLERRM
+[ ] %TYPE vs %ROWTYPE
+[ ] RECORD vs COLLECTION
+[ ] Associative array vs nested table vs VARRAY
+[ ] BULK COLLECT vs FORALL
+[ ] SAVE EXCEPTIONS questions
+[ ] Static SQL vs dynamic SQL
+[ ] EXECUTE IMMEDIATE vs DBMS_SQL
+[ ] Definer rights vs invoker rights
+[ ] Autonomous transaction questions
+[ ] COMMIT inside procedure scenarios
+[ ] Transaction and locking scenarios
+[ ] Deadlock troubleshooting
+[ ] Performance tuning scenarios
+[ ] Context switching questions
+[ ] Cursor vs collection performance
+[ ] Trigger vs procedure use cases
+[ ] Package state questions
+[ ] Function called from SQL restrictions
+[ ] Dynamic SQL injection scenarios
+[ ] Large-volume data processing scenarios
+[ ] Debugging and production support scenarios
+[ ] Real-world project explanation
+[ ] Write and optimize complex PL/SQL programs
+
+31. HANDS-ON PROJECTS
+---------------------
+[ ] Build employee management package
+[ ] Build payroll processing package
+[ ] Build audit logging framework
+[ ] Build error logging framework
+[ ] Build bulk insert/update/delete package
+[ ] Build CSV file import using UTL_FILE
+[ ] Build CSV file export using UTL_FILE
+[ ] Build scheduler-based batch job
+[ ] Build dynamic SQL reporting package
+[ ] Build REF CURSOR-based reporting API
+[ ] Build data validation framework
+[ ] Build ETL staging and loading package
+[ ] Build restartable batch processing framework
+[ ] Build data reconciliation utility
+[ ] Build encryption/decryption utility
+[ ] Build large-volume data migration utility
+[ ] Tune a slow PL/SQL procedure
+[ ] Build a trigger-based audit history solution
+[ ] Build a reusable database utility package
+[ ] Add unit tests and deployment scripts
+
+32. FINAL REVISION CHECKLIST
+---------------------------
+[ ] Fundamentals and block structure
+[ ] Variables and data types
+[ ] Conditional and iterative statements
+[ ] SQL statements inside PL/SQL
+[ ] Cursors and REF CURSOR
+[ ] Records and collections
+[ ] Exception handling
+[ ] Procedures and functions
+[ ] Packages
+[ ] Triggers
+[ ] Dynamic SQL
+[ ] BULK COLLECT and FORALL
+[ ] Transactions and concurrency
+[ ] Performance tuning
+[ ] LOB and file handling
+[ ] Scheduler and automation
+[ ] Security and privileges
+[ ] Debugging and error logging
+[ ] Advanced PL/SQL features
+[ ] Data dictionary and system views
+[ ] Development tools
+[ ] Coding standards
+[ ] Real-world scenarios
+[ ] Interview preparation
+[ ] Hands-on projects
+
+==================================================
+END OF ORACLE PL/SQL MASTER CHECKLIST
+==================================================

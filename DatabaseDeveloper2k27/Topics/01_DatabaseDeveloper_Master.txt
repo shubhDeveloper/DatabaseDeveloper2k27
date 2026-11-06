@@ -1,0 +1,104 @@
+Database Developer 2k27
+=========================================
+
+1. Database Technologies
+- Oracle Database 19c / 23ai
+- PostgreSQL
+- MySQL
+- Amazon Aurora
+- Amazon RDS
+-----------------------------------------
+
+2. SQL & Programming
+- Advanced SQL
+- PL/SQL
+- Python
+- Bash / Shell Scripting
+-----------------------------------------
+
+3. Database Internals
+- Indexing
+- Query Optimization
+- Execution Plans
+- Transactions & ACID
+- MVCC
+- Locking & Deadlocks
+- Partitioning
+- Replication
+- Sharding
+- Backup & Recovery
+-----------------------------------------
+
+4. Database Development Tools
+- Oracle SQL Developer
+- Oracle SQLcl
+- DBeaver
+- pgAdmin
+- MySQL Workbench
+- DataGrip
+- Toad for Oracle
+-----------------------------------------
+
+5. Performance Monitoring & Optimization
+- Oracle AWR
+- Oracle ASH
+- Oracle ADDM
+- EXPLAIN PLAN
+- PostgreSQL EXPLAIN ANALYZE
+- pg_stat_statements
+- MySQL Performance Schema
+- MySQL EXPLAIN
+-----------------------------------------
+
+6. Cloud & Database Services
+- AWS RDS
+- AWS Aurora
+- AWS DMS
+- AWS S3
+- AWS CloudWatch
+- Azure SQL Database
+- Azure Database for PostgreSQL
+- Azure Database for MySQL
+- Google Cloud SQL
+- Google AlloyDB
+-----------------------------------------
+
+7. Database Administration & DevOps
+- Linux
+- Git
+- GitHub
+- Docker
+- Jenkins
+- GitHub Actions
+- Liquibase
+- Flyway
+- Terraform
+-----------------------------------------
+
+8. Database Migration & ETL
+- Informatica PowerCenter
+- Informatica IDMC
+- AWS DMS
+- Oracle Data Pump
+- pg_dump / pg_restore
+- Debezium
+- Apache Airflow
+-----------------------------------------
+
+9. Distributed Database Technologies
+- Apache Kafka
+- Redis
+- MongoDB
+- Cassandra
+- CockroachDB
+- DynamoDB
+-----------------------------------------
+
+10. Data Engineering – Additional Advantage
+- Apache Spark
+- PySpark
+- Databricks
+- Snowflake
+- Azure Data Factory
+- ADLS
+- Amazon Redshift

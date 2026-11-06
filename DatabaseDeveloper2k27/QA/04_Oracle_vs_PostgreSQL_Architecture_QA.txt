@@ -1,0 +1,1961 @@
+##########################################################################
+#                                                                        #
+#   ORACLE vs POSTGRESQL                                                 #
+#   ARCHITECTURE, INTERNALS & INTERVIEW GUIDE                            #
+#   For 6+ Years Experienced Database Developers / Engineers             #
+#                                                                        #
+##########################################################################
+
+HOW THIS DOCUMENT IS ORGANISED
+------------------------------
+PART 1 : ORACLE - architecture explained (simple first, then deeper)
+PART 2 : ORACLE - interview questions on architecture and internals (O1-O55)
+PART 3 : POSTGRESQL - architecture explained (simple first, then deeper)
+PART 4 : POSTGRESQL - interview questions on architecture and internals (P1-P55)
+PART 5 : ORACLE vs POSTGRESQL - architecture and process differences
+         (side-by-side tables, comparison questions C1-C25, term glossary)
+PART 6 : How to present architecture answers in a senior interview
+
+HOW TO ANSWER AT 6+ YEARS
+- Do not stop at definitions. Always connect internals to a production
+  symptom: "log file sync means commits wait for LGWR", "idle in
+  transaction blocks vacuum so bloat grows".
+- Draw the flow: client -> process -> memory -> redo/WAL -> data files.
+- Mention versions: features differ by release (Oracle 12c/19c/23ai,
+  PostgreSQL 12 to 18). Say which version you have run in production.
+- "REAL-WORLD" lines are templates; replace numbers with your own.
+
+
+##########################################################################
+# PART 1: ORACLE DATABASE ARCHITECTURE (EXPLAINED)
+##########################################################################
+
+==========================================================================
+ 1.1 THE BIG PICTURE (BEGINNER VIEW)
+==========================================================================
+An Oracle server has two halves:
+
+  DATABASE  = files on disk (data, redo, control, archive).
+  INSTANCE  = memory (SGA) + background processes that operate the database.
+
+One instance opens one database (single instance). In RAC, many instances
+on many servers open the SAME database on shared storage.
+
+ Client app
+    |  (Oracle Net / TCP 1521)
+    v
+ +----------+     spawns / hands off      +----------------------------------+
+ | Listener | --------------------------> | INSTANCE                         |
+ +----------+                             |  SGA (shared memory)             |
+                                          |   - Database Buffer Cache        |
+ User Process --> Server Process (+PGA) <-|   - Shared Pool (library cache,  |
+                                          |     dictionary cache, result     |
+                                          |     cache)                       |
+                                          |   - Redo Log Buffer              |
+                                          |   - Large / Java / Streams pools |
+                                          |  Background processes:           |
+                                          |   PMON SMON DBWn LGWR CKPT ARCn  |
+                                          |   MMON MMNL RECO LREG CJQ0 ...   |
+                                          +----------------+-----------------+
+                                                           |
+                      +------------------+-----------------+-------------+
+                      |                  |                 |             |
+                 Data files         Online redo logs   Control files  Archived
+                 (tables, indexes,  (groups/members)   (metadata,     redo logs
+                  UNDO, TEMP)                           SCN, files)
+
+==========================================================================
+ 1.2 MEMORY STRUCTURES
+==========================================================================
+SGA (System Global Area) - shared by all processes:
+
+ a) Database Buffer Cache
+    - Caches data blocks (default 8 KB) read from datafiles.
+    - Managed with a touch-count modified LRU. Dirty buffers sit on a
+      checkpoint queue and are written by DBWn.
+    - Pools: DEFAULT, KEEP, RECYCLE, plus non-standard block-size caches.
+    - Access is protected by "cache buffers chains" latches. Hot blocks
+      cause "latch: cache buffers chains" or "buffer busy waits".
+
+ b) Shared Pool
+    - Library cache: parsed SQL (cursors), PL/SQL, execution plans.
+      Parent cursor (SQL text) + child cursors (plan per environment).
+    - Dictionary (row) cache: data dictionary metadata (tables, columns,
+      privileges).
+    - Result cache: SQL/PL/SQL function results.
+    - Errors: ORA-04031 (cannot allocate shared memory) - usually literal
+      SQL (no binds) causing fragmentation.
+
+ c) Redo Log Buffer
+    - Circular buffer where change vectors are written first.
+    - LGWR flushes it to online redo logs.
+
+ d) Large Pool: shared-server session memory (UGA), RMAN buffers,
+    parallel execution message buffers.
+ e) Java Pool, Streams Pool, In-Memory Column Store (option).
+
+PGA (Program Global Area) - private to each server process:
+    - Sort area, hash area, bitmap merge area (work areas).
+    - Session information (UGA) and private SQL area.
+    - Controlled by PGA_AGGREGATE_TARGET (soft) and PGA_AGGREGATE_LIMIT
+      (hard). Spills go to TEMP tablespace.
+
+Memory management modes: AMM (MEMORY_TARGET), ASMM (SGA_TARGET +
+PGA_AGGREGATE_TARGET) - most production DBs use ASMM (AMM doesn't work
+with HugePages on Linux).
+
+==========================================================================
+ 1.3 BACKGROUND PROCESSES
+==========================================================================
+ PMON/CLMN : cleans up failed user processes, releases locks/resources.
+ LREG      : (12c+) registers services with the listener.
+ SMON      : instance recovery at startup, cleans temp segments, coalesces
+             free space, recovers dead transactions.
+ DBWn      : writes dirty buffers to datafiles (database writers).
+ LGWR      : writes redo buffer to online redo logs. Commit waits on it.
+ CKPT      : signals checkpoints, updates control/datafile headers.
+ ARCn      : copies filled online redo logs to archive destination.
+ MMON/MMNL : AWR snapshots, metrics, alerts (hourly AWR by default).
+ RECO      : resolves in-doubt distributed transactions.
+ CJQ0/Jnnn : scheduler job coordinator and job slaves.
+ DBRM, VKTM, DIAG, PSP0, MMAN, SMCO, Wnnn : resource manager, timer,
+             diagnostics, process spawner, memory manager, space mgmt.
+ RAC only  : LMON, LMD, LMS (cache fusion), LCK, GCR.
+
+==========================================================================
+ 1.4 PHYSICAL STRUCTURES (FILES)
+==========================================================================
+ Datafiles     : actual data for tablespaces (SYSTEM, SYSAUX, UNDO, TEMP,
+                 USERS...). Tempfiles for TEMP.
+ Online redo   : at least 2 groups, each with 1+ members (multiplex).
+                 LGWR writes circularly; log switch moves to next group.
+ Archived redo : copies of filled redo logs when in ARCHIVELOG mode
+                 (needed for point-in-time recovery, Data Guard).
+ Control files : database name, datafile/redo locations, checkpoint info,
+                 SCN, RMAN metadata. Multiplexed. Losing all = recovery.
+ SPFILE/PFILE  : startup parameters.
+ Password file, alert log, trace files (ADR - Automatic Diagnostic
+ Repository), wallet (TDE).
+
+==========================================================================
+ 1.5 LOGICAL STRUCTURES
+==========================================================================
+ Database > Tablespace > Segment > Extent > Data Block
+
+ - Block: smallest I/O unit (2K-32K, commonly 8K).
+ - Extent: contiguous blocks. Segment: all extents of one object (table,
+   index, partition, LOB, undo, temp).
+ - Locally Managed Tablespaces with ASSM (bitmap-based free space) are the
+   norm. High-Water Mark (HWM) separates formatted from unformatted blocks;
+   full scans read up to HWM.
+ - ROWID = data object# + file# + block# + row slot#.
+
+Data block layout:
+   [ Header (ITL slots) | Table dir | Row dir | ... free space ... | Rows ]
+ ITL = Interested Transaction List: one slot per concurrent transaction
+ touching the block (INITRANS/MAXTRANS). Each row has a lock byte pointing
+ to the ITL slot - Oracle stores row locks in the block, not in a lock table.
+
+==========================================================================
+ 1.6 HOW A SQL STATEMENT RUNS (END TO END)
+==========================================================================
+ 1) Client connects: listener -> dedicated server process (or dispatcher
+    for shared server, or DRCP pooled server). PGA is allocated.
+ 2) PARSE: syntax check -> semantic check (privileges, objects) ->
+    library-cache lookup by SQL text hash (SQL_ID).
+      - Found = SOFT parse (reuse).
+      - Not found = HARD parse: optimizer transformations + plan costing.
+ 3) BIND/DEFINE: bind values supplied (bind peeking may influence plan).
+ 4) EXECUTE: row-source tree runs. Blocks fetched from buffer cache; if
+    absent, physical read into cache (db file sequential/scattered read).
+ 5) FETCH: rows returned to client in array-size batches.
+
+ For DML:
+ a) Server process finds block in buffer cache (reads if needed).
+ b) Allocates undo (undo segment transaction table slot), writes undo
+    record (old values) into undo block (also a buffer, also logged).
+ c) Generates redo for BOTH the data change and the undo change into the
+    redo log buffer.
+ d) Changes the data block in cache (now dirty), sets row lock byte/ITL.
+ e) COMMIT: assigns commit SCN, LGWR writes redo (incl. commit record) to
+    disk -> "log file sync" -> user told committed. Dirty data blocks are
+    NOT written at commit (no-force policy). Locks released; block cleanout
+    may be delayed.
+ f) DBWn lazily writes dirty blocks later (no-steal is NOT enforced:
+    uncommitted changes may reach disk; undo + redo handle recovery).
+ Write-ahead rule: redo must be on disk before the corresponding dirty data
+ block is written.
+
+==========================================================================
+ 1.7 READ CONSISTENCY, UNDO AND SCN
+==========================================================================
+ - SCN (System Change Number): global logical clock. Each statement/
+   transaction starts with an SCN; queries see data "as of" that SCN.
+ - If a reader finds a block changed after its SCN (or with uncommitted
+   data), Oracle clones the block and applies UNDO to roll it back -
+   a consistent-read (CR) block. Readers never block writers.
+ - ORA-01555: undo needed for CR was overwritten (undo too small, long
+   query, fetch across commits).
+ - Undo serves 3 roles: rollback, read consistency, flashback/recovery.
+ - UNDO_RETENTION: target seconds to keep committed undo ("unexpired").
+ - Delayed block cleanout: after commit, blocks are not immediately cleaned
+   of transaction info; next reader cleans them (can cause redo on SELECT).
+
+==========================================================================
+ 1.8 CHECKPOINTS, REDO AND RECOVERY
+==========================================================================
+ - Checkpoint = advance of the point from which recovery must start:
+   all changes before it are on disk in datafiles. Types: full (shutdown),
+   incremental (continuous; driven by FAST_START_MTTR_TARGET), log switch,
+   tablespace/datafile (offline, begin backup).
+ - Instance recovery after crash (automatic, by SMON at open):
+     ROLL FORWARD: apply redo from checkpoint position to end of redo
+     (repeating history, including uncommitted).
+     ROLL BACK: undo uncommitted transactions (can be done after the DB
+     opens, on demand, in background).
+ - Media recovery: restore datafile from backup (RMAN) + apply archived and
+   online redo (to latest, or to time/SCN/cancel).
+ - Redo log groups states: CURRENT, ACTIVE (needed for crash recovery,
+   checkpoint not yet complete), INACTIVE, UNUSED.
+
+==========================================================================
+ 1.9 CONCURRENCY CONTROL: LOCKS, LATCHES, MUTEXES
+==========================================================================
+ - Enqueues (locks): TX (transaction/row), TM (table DML), UL (user),
+   others. Queue-based, deadlock detection, visible in V$LOCK.
+ - Row locking: lock byte + ITL; no lock escalation, no memory per row lock.
+ - Latches: low-level, short, spin-then-sleep (e.g. cache buffers chains,
+   redo allocation). Mutexes: lightweight for library cache objects.
+ - Pins/buffer busy waits for same-block contention.
+ - Isolation: READ COMMITTED (default), SERIALIZABLE, READ ONLY. No dirty
+   reads; writers don't block readers.
+
+==========================================================================
+ 1.10 STARTUP, SHUTDOWN, MULTITENANT, RAC, DATA GUARD
+==========================================================================
+ Startup stages:
+   NOMOUNT : read SPFILE, create SGA/processes (instance only)
+   MOUNT   : read control file
+   OPEN    : open datafiles/redo, instance recovery if needed
+ Shutdown: NORMAL (wait for sessions), TRANSACTIONAL, IMMEDIATE (rollback and
+   close; standard), ABORT (like a crash; instance recovery at next start).
+
+ Multitenant (12c+): CDB (root + seed + PDBs). One instance/SGA/background
+   processes shared; each PDB has its own datafiles/schemas. Fast clone,
+   unplug/plug, resource isolation. 21c+ is multitenant only.
+
+ RAC: multiple instances, one shared database (ASM/shared storage). Cache
+   Fusion ships blocks over a private interconnect (GCS/GES), SCAN listener,
+   voting disks/OCR in Clusterware. Gives HA + scalability for suitable
+   workloads; needs attention to hot blocks and sequences (CACHE, NOORDER).
+
+ Data Guard: standby databases fed with redo (physical = block-identical
+   redo apply; logical = SQL apply). Protection modes: Maximum Performance
+   (async), Availability, Protection (sync). Active Data Guard: read-only
+   standby while applying.
+
+ ASM: Oracle's volume manager/filesystem for database files (striping,
+   mirroring, rebalance).
+
+==========================================================================
+ 1.11 OPTIMIZER, STATISTICS AND DICTIONARY
+==========================================================================
+ - Cost-Based Optimizer: uses stats (num rows, blocks, NDV, histograms,
+   clustering factor, system stats) to choose among plans.
+ - Query transformations: view merging, subquery unnesting, predicate
+   pushing, join predicate pushdown, OR expansion, star transformation.
+ - Adaptive features (12c+): adaptive plans, dynamic statistics, SQL plan
+   directives, automatic reoptimization (cardinality feedback). SQL Plan
+   Management for stability.
+ - Data dictionary: base tables owned by SYS (never touched manually),
+   exposed through DBA_/ALL_/USER_ views. V$/GV$ views expose live memory
+   structures. AWR/ASH store history in SYSAUX.
+ - Automated maintenance windows: statistics gathering, segment advisor,
+   SQL tuning advisor.
+
+
+##########################################################################
+# PART 2: ORACLE - ARCHITECTURE & INTERNALS INTERVIEW QUESTIONS (O1-O55)
+##########################################################################
+
+---------------------------- A. BASICS TO CORE ---------------------------
+
+O1. What is the difference between an Oracle instance and a database?
+A.  Instance = SGA + background processes (volatile, in memory). Database =
+physical files (datafiles, redo, control). An instance opens exactly one
+database (RAC: many instances, one database). You can start an instance
+without a database (NOMOUNT). Instance failure loses memory only; the
+database is recovered from redo.
+REAL-WORLD: During a server reboot I explained to app teams that data is
+safe because committed redo was on disk; instance recovery was automatic.
+
+O2. Explain the SGA components and which ones you tune most.
+A.  Buffer cache, shared pool (library cache, dictionary cache, result
+cache), redo log buffer, large pool, Java pool, streams pool, in-memory area.
+Most tuning attention: buffer cache hit patterns and hot blocks, shared pool
+(literals -> ORA-04031 / mutex waits; use binds, size properly), redo log
+buffer (rarely > 100 MB), and large pool for shared server/parallel/RMAN.
+Use V$SGA_TARGET_ADVICE and AWR advisories, but confirm with wait events.
+REAL-WORLD: High library cache mutex waits were solved by fixing literal SQL
+and setting a sensible shared pool floor, not by blindly enlarging memory.
+
+O3. PGA vs UGA vs SGA - what is where?
+A.  PGA is private per server process: work areas (sort/hash), cursor state,
+variables. UGA (session state: package variables, cursors) lives in the PGA
+for dedicated server connections but in the SGA (large pool) for shared
+server. Large sorts/hash joins that exceed their work area spill to TEMP
+("multi-pass"). Control with PGA_AGGREGATE_TARGET/LIMIT.
+REAL-WORLD: Unbounded BULK COLLECT in PL/SQL ballooned PGA until ORA-04030;
+fixed using LIMIT.
+
+O4. List the important background processes and what happens if each dies.
+A.  DBWn, LGWR, CKPT, SMON, PMON are mandatory - if any dies the instance
+terminates (crashes) and recovers on restart. ARCn death isn't fatal but redo
+logs can't be archived (database may hang with ORA-00257 when logs fill).
+MMON failure stops AWR/alerts only.
+REAL-WORLD: Archiver stuck on a full archive destination hung the database;
+I freed space, took RMAN backup deleting archives, and added alerts.
+
+O5. What happens when a client connects to Oracle?
+A.  Client resolves service name -> contacts listener -> listener
+hands off to (or spawns) a dedicated server process (or dispatcher for
+shared server, or DRCP pooled server) -> authentication -> session and PGA
+created -> logon triggers -> session in V$SESSION. With RAC, SCAN/VIP and
+connection load balancing pick an instance.
+REAL-WORLD: Slow logins traced to DNS reverse lookups and a logon trigger;
+fixed both.
+
+O6. Dedicated server vs shared server vs DRCP?
+A.  Dedicated: one server process per session (best for OLTP/long
+transactions, default). Shared server: dispatchers route requests to a pool
+of shared servers (saves processes, bad for long-running work, UGA in
+SGA/large pool). DRCP: pool of server processes for short-lived connections
+from stateless apps (e.g. PHP), reducing connect cost.
+REAL-WORLD: Used application-side pooling (UCP/HikariCP) with dedicated
+servers rather than shared server for predictable performance.
+
+O7. Describe the lifecycle of a SQL statement.
+A.  Parse (syntax, semantic, shared pool lookup; soft vs hard parse) ->
+bind -> execute (row source tree, consistent gets/physical reads) -> fetch.
+Hard parse includes transformations and cost-based plan generation and takes
+latches/mutexes; soft parse avoids optimizer work. Cursor sharing depends on
+SQL text, bind metadata and optimizer environment.
+REAL-WORLD: Reduced hard parses/sec from 800 to 20 by enforcing bind
+variables in the data access layer.
+
+O8. Library cache internals: parent/child cursors, version count, mutexes?
+A.  Parent cursor = SQL text hash. Child cursors = distinct plan/environment
+variants (different NLS, bind length buckets, optimizer settings, Adaptive
+Cursor Sharing). High VERSION_COUNT (hundreds) causes "cursor: mutex S/X"
+waits. Check V$SQL_SHARED_CURSOR for reason codes. Fix root cause (bind
+mismatches, NLS differences, literals) rather than flush.
+REAL-WORLD: A single SQL had 3,000 children because of varying bind sizes in
+a legacy driver; upgraded driver and normalized binds.
+
+O9. How is the buffer cache managed? What are hot blocks?
+A.  Hash buckets of buffer headers protected by cache-buffers-chains latches;
+touch-count-based replacement (modified LRU); dirty buffers tracked on the
+checkpoint queue. Full table scans of large tables use direct path reads
+(bypass cache) or recycle-style handling. Hot blocks (e.g. a tiny lookup
+table or right-edge index leaf on a sequence key) cause latch/buffer busy
+contention. Fixes: reverse key/hash partition indexes, spread data
+(PCTFREE), cache in app, reduce logical IO.
+REAL-WORLD: A sequence-based PK index right-edge contention was eased with
+hash-partitioned global index.
+
+---------------------- B. TRANSACTIONS, REDO AND UNDO --------------------
+
+O10. Walk through what happens on UPDATE then COMMIT.
+A.  Block read into cache -> undo segment slot + undo record created ->
+redo generated for undo and data changes -> block modified, row lock byte/ITL
+set -> COMMIT: commit record in redo buffer, LGWR flushes ("log file sync"),
+SCN assigned, locks released; dirty blocks stay in cache and DBWn writes
+later. Delayed block cleanout may finish transaction info on next access.
+REAL-WORLD: Answering this precisely helped me diagnose "log file sync"
+spikes: row-by-row commits were the cause.
+
+O11. What triggers LGWR to write?
+A.  Commit/rollback, redo buffer 1/3 full, 1 MB of redo accumulated, every 3
+seconds, before DBWn writes a block whose redo isn't yet on disk (write-ahead
+logging), and on checkpoints/log switch. LGWR can use slaves (LGnn) in newer
+versions. Group commit batches multiple sessions' commits in one write.
+REAL-WORLD: Moved redo logs to low-latency storage and sized groups so
+switches happened about every 15-20 minutes.
+
+O12. What triggers DBWn to write?
+A.  Checkpoint progress (incremental via FAST_START_MTTR_TARGET), buffer cache
+needs free buffers (scan depth), tablespace offline/ read-only/backup begin,
+dirty buffer threshold, every 3 seconds timeout. DBWn doesn't write on
+commit. "free buffer waits" indicate DBWn can't keep up.
+REAL-WORLD: Added DBWn processes and improved I/O after seeing free buffer
+waits and write complete waits.
+
+O13. Redo vs undo - differences and why both?
+A.  Redo = forward-looking log to re-apply changes (recovery, standby).
+Undo = backward-looking old values for rollback, read consistency and
+flashback. Redo is also generated for undo blocks (undo is itself protected
+by redo). Redo is sequential files; undo lives in undo tablespace segments
+cached in the buffer cache.
+REAL-WORLD: Used this to explain why a huge UPDATE generates redo about
+2x the data change (data + undo).
+
+O14. Explain checkpoint types and why they matter.
+A.  Full checkpoint (shutdown/immediate), incremental checkpoint (continuous
+via checkpoint queue; target set by FAST_START_MTTR_TARGET), thread
+checkpoint (log switch), object checkpoint (drop/truncate, offline).
+Checkpoint position is stored in control file and datafile headers and
+defines where crash recovery starts. Too-frequent checkpoints add I/O;
+too infrequent lengthen recovery.
+REAL-WORLD: Set MTTR target to 120s balancing recovery time vs write load.
+
+O15. Explain instance recovery step by step.
+A.  Startup detects unclean shutdown (control file/header SCN mismatch) ->
+SMON rolls forward by applying redo from last checkpoint to end (including
+changes of uncommitted transactions), opens database, then rolls back
+uncommitted transactions using undo (in background/on demand). Time depends
+on checkpoint distance. No archived logs normally needed.
+REAL-WORLD: Crash recovery of a 2 TB DB took ~4 minutes because MTTR was
+tuned; I documented RTO based on this.
+
+O16. What is SCN and how is it used?
+A.  A monotonically increasing logical timestamp. Used for read consistency,
+commit ordering, recovery, flashback, Data Guard, GoldenGate and
+distributed transactions. Visible via CURRENT_SCN, SCN_TO_TIMESTAMP. The
+control file stores checkpoint SCNs. SCN headroom concerns (2012-2019)
+were fixed with patches; keep patched.
+REAL-WORLD: Used flashback query AS OF SCN to compare data before/after a
+faulty batch.
+
+O17. How does read consistency work, and what is ORA-01555?
+A.  Query SCN fixed at start. For blocks changed later, Oracle builds a CR
+copy by applying undo. If needed undo is overwritten (expired and reused),
+ORA-01555. Causes: undersized undo, long queries, commits inside fetch loops,
+delayed block cleanout. Fix: size undo / UNDO_RETENTION, RETENTION GUARANTEE
+(careful: can fail DML), fix commit-in-loop, shorten queries.
+REAL-WORLD: Month-end report hit 01555 after undo autotune shrank; we set
+retention and fixed the loop.
+
+O18. What is delayed block cleanout?
+A.  After commit, Oracle doesn't revisit every changed block to clear
+transaction info (ITL/lock bytes); the next session touching it cleans it
+(may generate redo even for a SELECT, and requires checking undo
+transaction table). Large transactions with many blocks flushed before
+commit are the typical case ("commit SCN stored lazily").
+REAL-WORLD: Explained unexpected redo from a SELECT after a huge batch load.
+
+O19. Explain block structure, ITL, PCTFREE, chaining and migration.
+A.  Block = header (with ITL), table directory, row directory, free space,
+row data. INITRANS reserves ITL slots; ITL waits (enq: TX - allocate ITL)
+happen when many sessions modify one block and no free ITL space exists.
+PCTFREE reserves space for updates. Row migration: updated row no longer fits
+-> moved, leaving forwarding pointer (rowid retained). Row chaining: row
+larger than one block.
+REAL-WORLD: Fixed ITL waits on a hot status table by increasing INITRANS
+and rebuilding.
+
+O20. Segments, extents, HWM, ASSM - explain and why it matters.
+A.  Segments contain extents of blocks. ASSM uses bitmaps for free space
+within segments (no freelists), good for concurrency. HWM marks the top of
+used blocks; full scans read to HWM even if empty; lowered by TRUNCATE,
+SHRINK SPACE, MOVE. Direct-path inserts load above HWM.
+REAL-WORLD: Shrinking a work-queue table reduced a 2 s full scan to 20 ms.
+
+O21. What is a ROWID and why is it not a stable key?
+A.  Physical address: object number, relative file#, block#, row slot.
+Changes if row moves (partition key update with ROW MOVEMENT, MOVE/SHRINK,
+export/import). Fine inside one statement/session logic; never store as a
+permanent key.
+REAL-WORLD: Fixed a job that cached ROWIDs across a table move.
+
+O22. Tablespaces, datafiles, temp, bigfile - what do you design?
+A.  Separate tablespaces by purpose (data, index, LOB, partition ranges) for
+manageability and backup/recovery granularity; locally managed + ASSM;
+TEMP tablespace groups for parallel; UNDO sized for longest transaction;
+bigfile tablespaces to simplify admin in ASM. Avoid autoextend surprises.
+REAL-WORLD: Partitions in dedicated tablespaces allowed moving cold data to
+cheaper storage and making older partitions read-only.
+
+O23. What is in the control file and what if you lose it?
+A.  DB name/DBID, datafile & redo locations, checkpoint SCNs, archived log
+history, RMAN metadata, tablespace info. Always multiplex. If all copies
+are lost: restore from autobackup or recreate (CREATE CONTROLFILE), then
+recover with redo.
+REAL-WORLD: Practiced control-file restore in DR drills.
+
+O24. ARCHIVELOG vs NOARCHIVELOG; log switch and ORA-00257?
+A.  ARCHIVELOG: filled redo logs are copied by ARCn so you can do online
+backups, PITR and Data Guard. If the archive destination is full, log switches
+block (ORA-00257) and the DB appears hung. Monitor FRA usage, backup and
+delete archives (RMAN DELETE ... BACKED UP).
+REAL-WORLD: Added alert at 70% FRA and an automated RMAN archive backup.
+
+O25. Redo log sizing and "log file switch (checkpoint incomplete)"?
+A.  Logs too small -> frequent switches; DBWn can't finish checkpointing
+before LGWR needs the log again -> checkpoint incomplete/ archiving needed
+waits. Size so switches occur ~every 15-30 min at peak; add groups; fast
+storage for redo; check archiver throughput.
+REAL-WORLD: Increased 200 MB logs to 4 GB and added groups; waits vanished.
+
+----------------------- C. LOCKING AND CONCURRENCY -----------------------
+
+O26. Locks vs latches vs mutexes vs enqueues?
+A.  Enqueues are queued, deadlock-detected locks for logical resources
+(TX, TM). Latches protect memory structures (spin then sleep, no queue).
+Mutexes are finer-grained, cheaper latch replacements for cursors/objects.
+Buffer pins protect a buffer during access. Latch/mutex waits imply CPU/
+contention issues; enqueue waits imply application locking.
+REAL-WORLD: Distinguished "enq: TX - row lock contention" (app design)
+from "latch: shared pool" (parsing) in AWR to route issues correctly.
+
+O27. How does Oracle implement row-level locking?
+A.  A transaction gets an ITL slot in the block and sets the row's lock
+byte to that ITL index; the TX enqueue is held on the transaction's undo
+slot. Other sessions requesting the row wait on the TX enqueue until commit/
+rollback. No lock table in memory, hence no escalation. TM locks protect
+tables from DDL during DML.
+REAL-WORLD: Explained why Oracle scales with millions of row locks.
+
+O28. Unindexed foreign keys - what's the problem?
+A.  Deleting/updating parent keys requires a lock on the child table (TM
+share lock in older versions, or row-level scans on child) causing
+blocking and deadlocks. Index FK columns when parents are modified or
+joins are common.
+REAL-WORLD: Deadlocks disappeared after indexing child FK columns.
+
+O29. Enqueue deadlock detection and ORA-00060?
+A.  Oracle detects cycles in waits (every few seconds), rolls back the
+statement of one session (not whole transaction) and raises ORA-00060; the
+trace file in ADR shows both sessions' SQL. App must handle by retry or
+fix lock ordering.
+REAL-WORLD: Analyzed deadlock trace to find two procedures locking in
+opposite order.
+
+--------------------------- D. OPTIMIZER AND SQL -------------------------
+
+O30. How does the Oracle optimizer work?
+A.  Parse tree -> transformation phase (heuristic and cost-based rewrites:
+view merging, subquery unnesting, predicate pushdown, OR-expansion,
+star transformation) -> plan generation (access paths, join methods/orders,
+costs using statistics, system stats) -> best plan chosen and stored in
+shared pool. Adaptive plans can switch join methods at runtime; SQL Plan
+Management baselines can stabilize plans.
+REAL-WORLD: Used 10053 trace to see why join order changed after stats
+gathering.
+
+O31. Statistics and histograms - types and pitfalls?
+A.  Table/column/index stats, NDV, density, nulls, histograms (frequency,
+top-frequency, hybrid, height-balanced legacy). Bad histograms on bind-
+dependent columns cause plan instability; use METHOD_OPT carefully. Extended
+stats for column groups/expressions. Gather with DBMS_STATS, AUTO sample,
+incremental for partitions, lock stats on volatile tables.
+REAL-WORLD: Removed a histogram on a skewed status column causing flip-flop
+plans with bind peeking, and used SQL baseline.
+
+O32. Adaptive Cursor Sharing, bind peeking, cursor_sharing?
+A.  Bind peeking uses the first bind at hard parse. ACS (11g+) marks cursors
+bind-sensitive and creates multiple children when bind values produce very
+different row counts. CURSOR_SHARING=FORCE rewrites literals but is a
+workaround.
+REAL-WORLD: Diagnosed using V$SQL.IS_BIND_SENSITIVE/AWARE.
+
+O33. Direct path vs conventional path reads/writes?
+A.  Conventional: through buffer cache, SGA latches, undo/redo generated.
+Direct path: bypasses cache (parallel full scans, large serial scans, sort
+spills, APPEND inserts, SQL*Loader direct). Direct path reads are good for
+large scans but mean repeated scans don't get cached.
+REAL-WORLD: Switched a heavily scanned table to be cached via KEEP pool and
+smaller serial direct read threshold tuning after profiling.
+
+O34. Parallel execution architecture?
+A.  Query Coordinator (QC) plus PX server processes (producer/consumer sets)
+exchanging rows via table queues. DOP controlled by hints, table/index
+degree, PARALLEL_DEGREE_POLICY (auto), Resource Manager. Parallel DML needs
+enabling and commit before reading. Skew and too many PX servers hurt other
+workloads.
+REAL-WORLD: Capped DOP using consumer groups for the batch role.
+
+O35. Partitioning internals and global index maintenance?
+A.  Partitions are separate segments; partition pruning at parse/execution.
+Local indexes align with partitions (easy maintenance); global indexes span
+partitions, becoming UNUSABLE on partition ops unless UPDATE INDEXES
+(asynchronous maintenance in 12c for DROP/TRUNCATE). Interval partitioning
+auto-creates partitions; exchange partition is a dictionary-only swap.
+REAL-WORLD: Monthly purge was converted into DROP PARTITION ... UPDATE
+GLOBAL INDEXES.
+
+O36. B-tree index internals?
+A.  Root, branch, leaf blocks; leaf entries (key + rowid) doubly linked;
+50/50 splits for random inserts and 90/10 for right-edge inserts. Deleted
+entries are reused, so regular rebuilds are mostly a myth; rebuild only
+with clear evidence. Bitmap indexes lock ranges of rows (bad for OLTP).
+Index compression and invisible indexes help testing.
+REAL-WORLD: Stopped a weekly index-rebuild job after measuring no benefit;
+saved IO and locking.
+
+---------------- E. HA, BACKUP, MULTITENANT, OPERATIONS ------------------
+
+O37. RMAN architecture and backup strategy?
+A.  RMAN uses server sessions to read datafiles, writes backup pieces/sets or
+image copies, tracks metadata in control file/catalog. Block change tracking
+makes incrementals fast. Strategy: weekly level 0 + daily level 1 (cumulative
+or differential) + archivelog backups; validate (RESTORE VALIDATE); test
+restores; define RPO/RTO. Recovery scenarios: restore datafile, PITR,
+tablespace PITR, block media recovery, PDB recovery.
+REAL-WORLD: Ran quarterly restore tests that exposed a missing archive log
+range and fixed policy.
+
+O38. RAC architecture and common issues?
+A.  Multiple instances, shared storage, Clusterware (CRS), ASM, voting disks,
+OCR, private interconnect, Cache Fusion (GCS/GES) transfers blocks between
+instances (gc cr/current block waits). Issues: hot blocks, sequences
+(use CACHE/NOORDER), interconnect latency, application affinity, split-
+brain avoided by voting. Services and load balancing route sessions.
+REAL-WORLD: Partitioned workloads by service to cut gc waits 60%.
+
+O39. Data Guard: types, modes and failover vs switchover?
+A.  Physical standby (redo apply, block identical, can be Active Data Guard
+read-only), logical standby (SQL apply), snapshot standby. Protection modes:
+Max Performance (ASYNC), Max Availability (SYNC with fallback), Max
+Protection (SYNC no fallback). Switchover = planned role swap, no data loss;
+failover = unplanned, may lose data in async. Use Data Guard Broker/Fast-Start
+Failover.
+REAL-WORLD: Performed switchover drills for patching with ~2 min downtime.
+
+O40. ASM overview?
+A.  Disk groups with striping and mirroring (normal/high/external
+redundancy), automatic rebalance on disk add/remove, instance of its own
+(+ASM), files named by ASM (OMF). Removes need for filesystem/LVM; used by
+RAC and standalone.
+REAL-WORLD: Added disks online and rebalanced without downtime.
+
+O41. Flashback technologies - what's available?
+A.  Flashback Query/Version Query/Transaction Query (undo-based), Flashback
+Table (undo + row movement), Flashback Drop (recycle bin), Flashback
+Database (flashback logs, rewinds the DB), Flashback Data Archive (long
+history). Not a replacement for backups.
+REAL-WORLD: Used Flashback Table to recover after a bad deployment script
+in a lower environment in seconds.
+
+O42. AWR, ASH and ADDM - how do they work?
+A.  MMON takes AWR snapshots (default hourly, retained 8 days) of V$ stats
+into SYSAUX; ASH samples active sessions every second in memory (flushing
+1 in 10 samples to AWR). ADDM analyzes snapshots and recommends. Use ASH for
+short spikes, AWR for trends, SQL Monitor for long ops. Diagnostics Pack
+licensing applies.
+REAL-WORLD: Used ASH for a 5-minute outage that AWR hourly average hid.
+
+O43. Startup and shutdown modes - what do you use in production and why?
+A.  STARTUP NOMOUNT/MOUNT/OPEN stages; SHUTDOWN IMMEDIATE normally (rolls back
+active transactions, no instance recovery needed). ABORT only when hung or
+for crash testing; TRANSACTIONAL waits for transactions. Always check alert
+log after.
+REAL-WORLD: A hung immediate shutdown was due to a long rollback; waited
+using v$transaction rather than aborting.
+
+O44. Multitenant architecture - benefits and gotchas?
+A.  One CDB instance with PDBs: consolidation, quick provisioning (clone),
+patch once, resource management per PDB, plug/unplug. Gotchas: common vs
+local users, per-PDB parameters, shared undo (12.2+ local undo option),
+connect via service names, backups at CDB or PDB level.
+REAL-WORLD: Consolidated 12 non-CDB dev databases into one CDB.
+
+O45. Resource Manager and Scheduler internals?
+A.  Resource Manager (DBRM) plans consumer groups with CPU/parallel/IO/
+session limits. Scheduler: CJQ0 coordinates, Jnnn run jobs, supports chains,
+windows, events, remote jobs. Use for protecting OLTP from batch.
+REAL-WORLD: Gave OLTP group 70% CPU priority during business hours.
+
+O46. Security architecture overview?
+A.  Users/roles/profiles, system and object privileges, definer/invoker
+rights, VPD (DBMS_RLS), Fine-Grained Auditing/Unified Audit, TDE (wallet,
+tablespace/column), Database Vault, Data Redaction, network encryption.
+Least privilege + auditing + encryption in transit/rest.
+REAL-WORLD: Implemented VPD policies for regional data access.
+
+O47. Oracle Net: listener, services, tnsnames, SCAN?
+A.  Listener (LISTENER, port 1521) maps service names to instances (dynamic
+registration via LREG). Clients use EZConnect or tnsnames.ora (service_name,
+failover, load balance). RAC SCAN gives single access name with 3 IPs.
+Troubleshoot using lsnrctl status/services, tnsping, listener logs.
+REAL-WORLD: Fixed intermittent ORA-12514 by correcting service registration.
+
+------------------------ F. TROUBLESHOOTING SCENARIOS --------------------
+
+O48. The database appears hung. What do you do?
+A.  1) Can you connect (sqlplus -prelim / oradebug hanganalyze)? 2) Check
+alert log, archiver/FRA full (ORA-00257), disk space, 3) ASH/V$SESSION:
+blockers, wait classes (Concurrency, Configuration, Commit), 4) latch/
+mutex storms, library cache pin, 5) undo/temp full, 6) kill blocker
+only after identifying root cause, 7) capture diagnostics before
+bounce. Post-incident: RCA and monitors.
+REAL-WORLD: A hang from FRA full: freed archives, resumed in 10 min.
+
+O49. Many sessions waiting on "log file sync". Approach?
+A.  Check average commit latency: LGWR "log file parallel write" time. If
+LGWR write is slow: storage latency, redo on busy disks, too many
+members/sync. If LGWR write is fast but sync is slow: CPU starvation or
+excessive commits. Fix: batch commits, faster redo storage, reduce redo,
+correct Data Guard SYNC latency.
+REAL-WORLD: App committed per row; moving to batches reduced waits 90%.
+
+O50. ORA-04031 appears intermittently. Approach?
+A.  Check which pool (shared pool/large pool/streams); literal SQL leading to
+fragmentation, large PL/SQL objects (pin large packages), too small
+pool, many versions. Use V$SHARED_POOL_RESERVED, V$SQL for literal
+duplicates (FORCE_MATCHING_SIGNATURE), fix with binds; avoid flush as a
+routine.
+REAL-WORLD: Found 1.2M near-identical literal statements; app fix removed
+04031.
+
+O51. Instance recovery takes too long. Why?
+A.  Large checkpoint gap (huge redo logs, high MTTR target, many dirty
+buffers), slow redo read I/O, parallel recovery not enabled, long
+transactions needing rollback. Tune FAST_START_MTTR_TARGET, check
+V$INSTANCE_RECOVERY, parallel recovery, avoid giant transactions.
+REAL-WORLD: Reduced crash recovery from 20 to 4 minutes with MTTR tuning.
+
+O52. Temp tablespace is full - what do you check?
+A.  V$TEMPSEG_USAGE/V$SORT_USAGE for sessions, SQL causing hash/sort spills,
+missing join predicates (cartesian), large GROUP BY/ORDER BY, parallel
+operations, global temporary tables, LOB temp. Add tempfile as relief; fix
+SQL and PGA settings.
+REAL-WORLD: Cartesian join from a missed predicate consumed 400 GB temp.
+
+O53. Segment/table growth: how do you reclaim space?
+A.  ALTER TABLE ... SHRINK SPACE (online, requires row movement), MOVE (online
+in 12.2+), DBMS_REDEFINITION, drop/purge old partitions, compress. Rebuild
+dependent indexes if unusable; check HWM and segment advisor.
+REAL-WORLD: Reclaimed 300 GB via partition drop and online move.
+
+O54. Statistics job and maintenance windows: how do you manage them?
+A.  Auto optimizer stats collection runs in maintenance windows (stale >10%
+changes). For volatile or partitioned tables set custom prefs
+(INCREMENTAL, STALE_PERCENT), lock stats, gather after ETL, monitor job
+history (DBA_SCHEDULER_JOB_RUN_DETAILS / DBA_OPTSTAT_OPERATIONS).
+REAL-WORLD: Locked stats on staging tables and gathered explicitly post-load.
+
+O55. How would you explain Oracle architecture in 2 minutes?
+A.  "An instance - SGA plus background processes - serves sessions through
+server processes with private PGA. Data blocks are cached in the buffer
+cache; changes generate redo and undo; commit just forces redo to disk via
+LGWR, while DBWn writes data blocks later using checkpoints. Undo gives
+rollback and read consistency; SCN orders everything. Crash recovery is
+roll-forward with redo then rollback with undo. Archive logs, RMAN,
+Data Guard and RAC give recovery and HA."
+
+
+##########################################################################
+# PART 3: POSTGRESQL ARCHITECTURE (EXPLAINED)
+##########################################################################
+
+==========================================================================
+ 3.1 THE BIG PICTURE (BEGINNER VIEW)
+==========================================================================
+PostgreSQL uses a PROCESS-PER-CONNECTION model. A "cluster" is one
+PostgreSQL server instance managing a data directory (PGDATA) that contains
+multiple databases.
+
+ Client app
+    |  (TCP 5432 / Unix socket)
+    v
+ +-----------+  fork()   +-------------------+
+ | postmaster| --------> | Backend process   |  one per connection
+ | (parent)  |           | (local memory:    |
+ +-----+-----+           |  work_mem, etc.)  |
+       |                 +---------+---------+
+       | forks                     |
+       v                           v
+ Background processes      +--------------------------------------------+
+  checkpointer             | SHARED MEMORY                              |
+  background writer        |  shared_buffers (page cache)               |
+  WAL writer               |  WAL buffers                               |
+  autovacuum launcher/     |  clog/SLRU buffers, lock tables, proc array|
+    workers                |  pg_stat shared stats (PG15+)              |
+  archiver, WAL sender/    +----------------------+---------------------+
+    receiver, logical      |                      |
+    replication workers    v                      v
+  (PG18: I/O workers)   Data files (base/)    WAL (pg_wal/)
+                         + OS page cache      + archive (optional)
+
+==========================================================================
+ 3.2 MEMORY STRUCTURES
+==========================================================================
+SHARED (allocated at startup, shared by all processes):
+ - shared_buffers: PostgreSQL's page cache (8 KB pages). Typical start
+   ~25% of RAM. PostgreSQL ALSO relies on the OS page cache
+   ("double buffering"), so effective_cache_size tells the planner how much
+   total cache (shared_buffers + OS) is likely available.
+   Replacement: clock-sweep with usage counts; large seq scans, VACUUM and
+   bulk writes use small ring buffers so they don't evict the whole cache.
+ - WAL buffers (wal_buffers): WAL records before flush to disk.
+ - SLRU buffers: pg_xact (commit status), subtrans, multixact, notify,
+   serializable (PG17 made these configurable).
+ - Lock manager tables, ProcArray (list of running transactions), shared
+   cumulative statistics (since PG15 - old stats collector process removed).
+
+PER-BACKEND (private, allocated on demand):
+ - work_mem: per sort/hash node (a query can use many multiples); hash nodes
+   can use work_mem x hash_mem_multiplier.
+ - maintenance_work_mem: VACUUM, CREATE INDEX, ALTER TABLE ADD FK.
+ - temp_buffers: temp table pages. Plus catalog caches (relcache, catcache),
+   plan caches for prepared statements/PL/pgSQL.
+ Because memory is per process, thousands of connections can exhaust RAM:
+ use a pooler (PgBouncer, pgcat, RDS Proxy).
+
+==========================================================================
+ 3.3 PROCESSES
+==========================================================================
+ postmaster       : supervisor; listens for connections; forks backends and
+                    background workers; restarts them after crashes
+                    (a backend crash triggers a cluster-wide restart/
+                    recovery as shared memory may be corrupted).
+ backend          : serves one client connection (parse, plan, execute).
+ checkpointer     : performs checkpoints: flush all dirty buffers, write
+                    checkpoint WAL record, recycle old WAL.
+ background writer: trickles dirty buffers to disk to keep free buffers
+                    available and smooth checkpoint I/O.
+ WAL writer       : flushes WAL buffers periodically (wal_writer_delay,
+                    200 ms) - also helps asynchronous commit.
+ autovacuum launcher + workers: run VACUUM/ANALYZE based on thresholds.
+ archiver         : copies completed WAL segments to archive (if enabled).
+ WAL sender / receiver : streaming replication (primary / standby).
+ startup process  : performs crash recovery and WAL replay on standbys.
+ logical replication launcher/apply workers; parallel workers;
+ walsummarizer (PG17 incremental backup); I/O workers (PG18, io_method=worker
+ for asynchronous I/O; io_uring option on Linux).
+ Stats collector: existed before PG15, replaced by shared-memory stats.
+ View all with: SELECT pid, backend_type FROM pg_stat_activity;
+
+==========================================================================
+ 3.4 PHYSICAL STRUCTURES ($PGDATA)
+==========================================================================
+  base/<db_oid>/<relfilenode>  : table & index files (1 GB segments).
+  global/                      : cluster-wide catalogs (pg_database, roles).
+  pg_wal/                      : WAL segments (16 MB default each).
+  pg_xact/                     : commit/abort status of transactions
+                                 (2 bits per xid; formerly pg_clog).
+  pg_multixact/, pg_subtrans/, pg_commit_ts/, pg_notify/, pg_serial/ : SLRU data.
+  pg_tblspc/                   : symlinks to tablespaces.
+  postgresql.conf, postgresql.auto.conf (ALTER SYSTEM), pg_hba.conf (auth),
+  pg_ident.conf, PG_VERSION, postmaster.pid.
+
+ Each relation has "forks": main (data), _fsm (free space map), _vm
+ (visibility map: all-visible/all-frozen bits), and init (unlogged tables).
+
+ Page (8 KB) layout:
+   [PageHeader | ItemId array (line pointers) -> grows down ...
+    ... free space ... <- tuples grow up | special space (indexes)]
+ TID/ctid = (block number, line pointer index). Index entries point to TIDs.
+ Tuple header (~23 bytes): xmin, xmax, cmin/cmax (command id), ctid
+ (next version link), infomask (hint bits), null bitmap.
+ TOAST: values > ~2 KB are compressed (pglz/lz4) and/or moved to a TOAST
+ table in chunks; transparent to SQL.
+
+==========================================================================
+ 3.5 MVCC: HOW PostgreSQL STORES VERSIONS
+==========================================================================
+ - UPDATE = mark old tuple dead (set xmax) + insert NEW tuple version
+   (new xmin) in the same table (heap). No separate undo.
+ - DELETE = set xmax. INSERT = new tuple with xmin.
+ - A snapshot (xmin, xmax, active xid list) decides visibility:
+   tuple visible if creator xid committed & before snapshot and not deleted
+   by a visible committed xid. Commit status read from pg_xact; result is
+   cached in tuple hint bits to avoid repeated clog lookups
+   (a SELECT can dirty pages by setting hint bits).
+ - HOT (Heap-Only Tuple) updates: if no indexed column changes and the new
+   version fits in the same page, no new index entries are needed; old
+   versions are pruned in-page ("page pruning").
+ - VACUUM: finds dead tuples not visible to any snapshot, removes index
+   entries, marks space reusable (free space map), updates visibility map,
+   freezes old xids. VACUUM FULL rewrites the table (exclusive lock).
+ - Transaction ID wraparound: xids are 32-bit; freezing protects old tuples.
+   Autovacuum runs anti-wraparound vacuums; if not possible the DB stops
+   accepting writes near the limit.
+ - Consequence: table bloat if vacuum is blocked (long transactions,
+   replication slots, prepared transactions, idle in transaction).
+
+==========================================================================
+ 3.6 WAL, CHECKPOINTS AND RECOVERY
+==========================================================================
+ - Write-Ahead Logging: every change is first described in WAL (LSN =
+   position). Commit = WAL record flushed to disk (synchronous_commit=on).
+   Data pages are written later by bgwriter/checkpointer/backends.
+ - full_page_writes: first modification of a page after a checkpoint logs the
+   whole page (protects against torn pages) - increases WAL after each
+   checkpoint, which is why checkpoint tuning matters.
+ - Checkpoints triggered by checkpoint_timeout (5 min), max_wal_size (1 GB
+   default), or manually. checkpoint_completion_target spreads writes.
+ - Crash recovery: startup process replays WAL from the last checkpoint's
+   redo point to the end. There is NO "rollback phase": uncommitted
+   transactions' tuples remain invisible (xid not committed) and vacuum
+   cleans them later.
+ - wal_level: minimal, replica (default), logical (for logical decoding).
+ - Timelines: new timeline created after promotion/PITR to separate histories.
+
+==========================================================================
+ 3.7 QUERY PROCESSING PIPELINE
+==========================================================================
+   SQL text
+     -> PARSER      (raw parse tree; syntax)
+     -> ANALYZER    (semantic analysis, catalog lookups -> query tree)
+     -> REWRITER    (rules, views are expanded here)
+     -> PLANNER/OPTIMIZER (generates paths, costs them, chooses cheapest)
+     -> EXECUTOR    (pull-based "Volcano" tree of plan nodes)
+ - Cost model: seq_page_cost=1, random_page_cost=4 (use ~1.1 on SSD),
+   cpu_tuple_cost=0.01, cpu_index_tuple_cost=0.005, cpu_operator_cost=0.0025.
+ - Join ordering by dynamic programming; GEQO (genetic) beyond
+   geqo_threshold (12) relations.
+ - Plans are NOT shared across sessions (no global shared plan cache);
+   each backend caches plans for prepared statements and PL/pgSQL
+   (generic vs custom plans).
+ - Statistics: pg_statistic/pg_stats from ANALYZE (MCV, histogram,
+   n_distinct, correlation); CREATE STATISTICS for multi-column.
+ - Parallel query: leader + parallel workers (dynamic background workers)
+   communicating via shared memory queues; Gather/Gather Merge nodes.
+ - JIT (LLVM) can compile expressions for big analytic queries.
+
+==========================================================================
+ 3.8 LOCKING AND CONCURRENCY
+==========================================================================
+ Four layers:
+  1) Spinlocks      - tiny critical sections in shared memory.
+  2) LWLocks        - lightweight locks for shared structures (buffer
+                      mapping, WAL insert); show as "LWLock:*" wait events.
+  3) Heavyweight locks - table/row/transaction/advisory locks, deadlock
+                      detection (deadlock_timeout 1 s). Row locks are stored
+                      in the tuple (xmax + infomask) and multixacts.
+  4) Predicate locks - for SERIALIZABLE (SSI) to detect rw-dependencies.
+ Isolation: READ COMMITTED (default), REPEATABLE READ (snapshot isolation),
+ SERIALIZABLE (SSI). No dirty reads.
+
+==========================================================================
+ 3.9 REPLICATION, BACKUP, HA
+==========================================================================
+ - Streaming (physical) replication: WAL stream to standbys; hot standby
+   allows read queries; async or sync (synchronous_standby_names);
+   replication slots retain WAL until consumed (watch disk usage!).
+ - Logical replication: publish/subscribe of row changes using logical
+   decoding (wal_level=logical). Selective tables, cross-version, used for
+   zero-downtime upgrades; DDL not replicated.
+ - Backups: pg_dump/pg_dumpall (logical), pg_basebackup / pgBackRest /
+   Barman (physical) + WAL archiving for PITR; PG17 incremental backup.
+ - HA: no built-in failover manager; use Patroni (etcd/Consul), repmgr,
+   pg_auto_failover, or managed services. pg_rewind resyncs old primary.
+ - Upgrades: pg_upgrade (in-place, --link fast), logical replication.
+
+==========================================================================
+ 3.10 CATALOG, EXTENSIBILITY, CONFIGURATION
+==========================================================================
+ - System catalogs (pg_class, pg_attribute, pg_index, pg_proc, pg_stats...)
+   are ordinary tables in each database; objects identified by OID.
+ - Extensibility is a core design goal: extensions, custom types/operators,
+   index access methods (GiST/GIN/BRIN...), table access methods, FDWs,
+   procedural languages, hooks (e.g. pg_stat_statements, auto_explain).
+ - Config precedence: compile defaults < postgresql.conf <
+   postgresql.auto.conf < ALTER DATABASE/ROLE SET < session SET.
+   Parameter "context": postmaster (restart), sighup (reload), superuser/
+   user (session). Check pg_settings.
+ - Startup/shutdown (pg_ctl): smart (wait for sessions), fast (default;
+   abort sessions, clean checkpoint), immediate (like crash - recovery on
+   next start).
+
+
+##########################################################################
+# PART 4: POSTGRESQL - ARCHITECTURE & INTERNALS INTERVIEW QUESTIONS (P1-P55)
+##########################################################################
+
+---------------------------- A. BASICS TO CORE ---------------------------
+
+P1. Explain PostgreSQL architecture in simple terms.
+A.  A cluster (one server instance on one PGDATA) is managed by the
+postmaster, which forks one backend process per client connection. Backends
+share shared_buffers, WAL buffers and lock tables in shared memory. Background
+processes (checkpointer, bgwriter, WAL writer, autovacuum, archiver, WAL
+senders) do maintenance. Data is in 8 KB pages in heap files; changes go
+to WAL first; MVCC keeps old row versions in the table until VACUUM cleans
+them.
+REAL-WORLD: I use this description to explain why connection counts and
+long-running transactions directly affect memory and bloat.
+
+P2. Why does PostgreSQL use process-per-connection? What are the trade-offs?
+A.  Historically simpler and more robust (isolation of crashes per backend,
+portability, no thread-safety concerns). Costs: connection start-up is
+expensive (fork + catalog cache warm-up), each backend uses memory
+(relcache, work_mem), context switching grows with thousands of connections,
+and process overhead limits max_connections practically to hundreds without
+pooling. Mitigate with PgBouncer and sensible pool sizes.
+REAL-WORLD: Reduced 3,000 app connections to 150 server connections with
+PgBouncer; CPU and memory dropped markedly.
+
+P3. What are the main background processes and what does each do?
+A.  checkpointer (periodic flush, checkpoints), background writer (smooth
+dirty page writing), WAL writer (flush WAL buffers), autovacuum launcher/
+workers, archiver, WAL sender/receiver (replication), startup (recovery),
+logical replication workers, stats/IO workers depending on version.
+If a backend crashes, the postmaster restarts all backends and runs crash
+recovery. See pg_stat_activity.backend_type.
+REAL-WORLD: An extension segfault in one backend restarted the whole
+cluster; I moved that extension out of the hot path and patched it.
+
+P4. What memory areas exist and how do you size them?
+A.  Shared: shared_buffers (~25% RAM start), wal_buffers (auto-sized, up to
+16 MB), SLRU buffers. Local: work_mem (per sort/hash node), maintenance_work_
+mem, temp_buffers. Planner hint: effective_cache_size (~50-75% RAM).
+Total potential = shared + (connections x work_mem x nodes) + maintenance.
+Size from workload; monitor temp files (log_temp_files) and cache hit ratios
+per relation, not just global.
+REAL-WORLD: Right-sized work_mem by role (OLTP 4 MB, reporting 128 MB) after
+seeing OOM kills.
+
+P5. How does shared_buffers differ from Oracle's buffer cache? Double buffering?
+A.  PostgreSQL buffers pages in shared_buffers AND the OS page cache holds
+copies (double buffering) because PG uses buffered I/O. Hence shared_buffers
+is not set to most of RAM. Replacement is clock-sweep with usage counts;
+large scans/VACUUM use ring buffers. Oracle typically bypasses the OS cache
+(direct I/O) and manages most memory itself. PG18 adds asynchronous I/O to
+improve read throughput.
+REAL-WORLD: pg_buffercache showed hot tables fitting; further increasing
+shared_buffers didn't help while OS cache did the work.
+
+P6. Describe the lifecycle of a query.
+A.  Parse -> analyze (catalog lookup) -> rewrite (views/rules) -> plan
+(path generation + cost) -> execute (Volcano-style iterator tree; each node
+returns tuples on demand) -> results to client. Simple Query vs Extended
+Query protocol (parse/bind/execute) for prepared statements. Plans are cached
+per session for prepared statements/PL/pgSQL, not globally.
+REAL-WORLD: Explained why many short connections hurt: each re-parses and
+re-plans with no shared plan cache.
+
+P7. How does the planner choose a plan?
+A.  Generates access paths (seq, index, bitmap, index-only) and join paths
+(nested loop, hash, merge) with cost estimates from statistics and cost
+constants (seq_page_cost, random_page_cost, cpu_*). Dynamic programming over
+join orders (GEQO for many tables). Costs are "arbitrary units" that
+correlate to page fetches. Wrong estimates, not wrong cost constants,
+usually cause bad plans.
+REAL-WORLD: Tuned random_page_cost to 1.1 after moving to NVMe; several
+index scans were chosen correctly.
+
+P8. Walk through what happens on INSERT, UPDATE, DELETE.
+A.  INSERT: backend finds a page with space (FSM), writes tuple (xmin=txid),
+logs WAL record, marks buffer dirty, updates indexes (each with WAL).
+UPDATE: sets xmax on old tuple, inserts new tuple (HOT if possible), updates
+indexes only if needed. DELETE: sets xmax. No data is removed physically
+until VACUUM. WAL flush at commit; data page writes later.
+REAL-WORLD: Used this to explain why UPDATE-heavy tables need vacuum tuning
+and fillfactor.
+
+P9. What happens on COMMIT?
+A.  Commit WAL record is generated and flushed (fsync) according to
+synchronous_commit; transaction status in pg_xact set to committed;
+ProcArray updated (snapshot visibility). Locks released. Data pages stay
+dirty and are flushed by bgwriter/checkpointer. With synchronous
+replication, commit also waits for standby ack (synchronous_commit levels).
+REAL-WORLD: Reduced commit latency for non-critical audit logging using
+synchronous_commit=off at the transaction level.
+
+P10. Describe a heap page and tuple header.
+A.  Page header, array of line pointers (ItemIds) at the front, tuples
+growing from the end, free space in the middle. Tuple header holds xmin,
+xmax, command id, ctid, infomask (hint bits, locked flags), null bitmap,
+then column data. Index entries point to (block, offset). Wide row
+overhead ~24 bytes/tuple + 4-byte line pointer.
+REAL-WORLD: Estimated table size correctly for 1B-row table including
+tuple overhead and alignment padding (column order matters!).
+
+P11. What is TOAST?
+A.  The Oversized-Attribute Storage Technique: values bigger than ~2 KB are
+compressed (pglz or lz4) and/or stored out-of-line in a per-table TOAST
+table in chunks, with a pointer in the main tuple. Storage strategies:
+PLAIN, EXTENDED, EXTERNAL, MAIN. Implication: SELECT * on wide
+columns costs I/O; updates of other columns don't rewrite TOASTed values.
+REAL-WORLD: Splitting big JSONB blobs into a separate table sped up
+scans of the hot narrow table.
+
+---------------------------- B. MVCC AND VACUUM --------------------------
+
+P12. Explain MVCC visibility rules and snapshots.
+A.  A snapshot records xmin (oldest active), xmax (next xid) and active xid
+list. A tuple version is visible if xmin committed and visible to the
+snapshot, and xmax is invalid/aborted/not yet visible. READ COMMITTED takes
+a new snapshot per statement; REPEATABLE READ per transaction. Commit status
+comes from pg_xact, cached as hint bits.
+REAL-WORLD: Used txid_current_snapshot()/pg_current_snapshot() to debug
+why a long transaction blocked cleanup.
+
+P13. What are hint bits and why can a SELECT write?
+A.  First reader to check a tuple's xmin/xmax commit status in pg_xact sets
+hint bits (committed/aborted) in the tuple header to avoid future lookups.
+That dirties the page; if checksums/wal_log_hints are on, may also WAL-log it.
+So SELECT after a large load can cause writes (and why teams run VACUUM
+after bulk loads).
+REAL-WORLD: Explained unexpected write I/O after a bulk COPY; a post-load
+VACUUM (FREEZE) fixed it.
+
+P14. What does VACUUM do, phase by phase? VACUUM vs VACUUM FULL?
+A.  Plain VACUUM: scans heap (using visibility map to skip), collects dead
+TIDs (limited by maintenance_work_mem; PG17 improved memory use), vacuums
+indexes, removes dead tuples from heap, updates FSM/VM, freezes old xids,
+may truncate empty trailing pages. Doesn't block normal DML. VACUUM FULL
+rewrites the table and indexes into new files with ACCESS EXCLUSIVE lock -
+returns space to OS but blocks everything. pg_repack achieves it online.
+REAL-WORLD: Replaced a weekly VACUUM FULL with autovacuum tuning plus
+pg_repack for rare cases.
+
+P15. How does autovacuum decide to run? How do you tune it?
+A.  Vacuum when dead tuples > autovacuum_vacuum_threshold (50) +
+autovacuum_vacuum_scale_factor (0.2) x reltuples; analyze similarly (0.1);
+insert-driven vacuum since PG13 (for freezing/vm). Throttled by cost-based
+delay (autovacuum_vacuum_cost_limit/delay), max workers (3) shared. For big
+hot tables set per-table: scale_factor 0.01-0.05, higher cost limit,
+more workers. Watch for autovacuum not finishing due to locks or old
+snapshots.
+REAL-WORLD: A 2B-row table with scale 0.2 waited for 400M dead rows; per-
+table 0.01 fixed bloat.
+
+P16. What blocks vacuum from cleaning dead tuples?
+A.  The "xmin horizon": oldest of (long-running transactions/snapshots,
+idle in transaction sessions, prepared transactions, replication slots'
+xmin / catalog_xmin, standbys with hot_standby_feedback). Find with
+pg_stat_activity (xact_start, backend_xmin), pg_replication_slots,
+pg_prepared_xacts. Fix the culprit; set
+idle_in_transaction_session_timeout.
+REAL-WORLD: A forgotten logical replication slot held xmin and bloated
+catalog tables by 80 GB.
+
+P17. What are the free space map and visibility map?
+A.  FSM tracks free space per page so inserts reuse space. VM stores two bits
+per page: all-visible (index-only scans can skip heap; vacuum can skip) and
+all-frozen (anti-wraparound vacuum can skip). Poor vacuuming means index-only
+scans do heap fetches.
+REAL-WORLD: Raised vacuum frequency on a table to restore index-only scans.
+
+P18. Explain HOT updates and page pruning.
+A.  HOT: if the update touches no indexed column and the new tuple fits in the
+same page, the new version is chained from the old one and no index entry is
+added. Page pruning (opportunistic, during reads/writes when the page is
+near full) removes dead HOT chains without VACUUM. Maximize with
+fillfactor 70-90 and avoid indexing frequently updated columns.
+REAL-WORLD: Dropped an unused index on an updated column: HOT ratio rose
+from 10% to 85% (pg_stat_user_tables.n_tup_hot_upd).
+
+P19. Explain transaction ID wraparound and multixacts.
+A.  32-bit xids compared circularly; a tuple older than ~2 billion would
+look "in the future". Freezing marks tuples as frozen (visible to all).
+Autovacuum forces vacuum when age(relfrozenxid) > autovacuum_freeze_max_age
+(200M). Multixact IDs track multiple lockers of the same row (FOR SHARE, FK
+checks) and have their own wraparound handling. If limits are neared,
+PostgreSQL refuses new xid allocations until vacuum completes.
+REAL-WORLD: Built alerts on age(datfrozenxid) > 1B and per-table
+age(relfrozenxid).
+
+------------------------ C. WAL, CHECKPOINT, RECOVERY --------------------
+
+P20. Explain WAL structure and LSN.
+A.  WAL is a sequence of records (insert/update/commit/checkpoint, per
+resource manager) stored in 16 MB segment files (pg_wal). LSN is a 64-bit
+byte position in the WAL stream (e.g. 0/16B3748). Used by recovery,
+replication (sent/flush/replay LSN), and page LSN for ordering. Names encode
+timeline + segment.
+REAL-WORLD: Computed replica lag in bytes with pg_wal_lsn_diff.
+
+P21. How do checkpoints work and why do they cause I/O spikes?
+A.  At checkpoint, all dirty shared buffers are flushed, a checkpoint record
+is written, and older WAL can be recycled. Triggered by checkpoint_timeout or
+reaching max_wal_size. After a checkpoint, first change to each page writes a
+full page image (full_page_writes), increasing WAL volume. Tuning: larger
+max_wal_size, checkpoint_timeout 15-30 min, checkpoint_completion_target 0.9.
+REAL-WORLD: Latency spikes every 5 min matched checkpoints; larger
+max_wal_size and spread writes removed them.
+
+P22. Explain crash recovery. How is it different from Oracle?
+A.  After unclean shutdown, the startup process reads pg_control for the
+last checkpoint and replays WAL from the redo location to the end. It's
+redo-only: uncommitted transactions don't need rollback because their tuple
+versions are simply invisible (xid not committed) and cleaned later by
+vacuum. Oracle must roll forward and then roll back using undo.
+REAL-WORLD: Used it to explain why PostgreSQL restarts come up quickly
+even after a long-running batch crash.
+
+P23. bgwriter vs checkpointer vs backend writes?
+A.  checkpointer: writes all dirty buffers at checkpoints. bgwriter: writes
+some dirty buffers continuously ahead of the clock sweep so backends find
+clean buffers. Backends write buffers themselves only when forced (a bad
+sign: many "buffers_backend" in pg_stat_bgwriter / pg_stat_io). PG16+ pg_stat_io
+gives detailed breakdown.
+REAL-WORLD: High backend writes pointed to undersized shared_buffers and
+aggressive bulk loads; tuned bgwriter_lru_maxpages.
+
+P24. wal_level, synchronous_commit, fsync - what are the effects?
+A.  wal_level: minimal (no replication), replica (physical replication/
+archiving), logical (adds info for logical decoding). synchronous_commit:
+off (async, risk losing recent commits but no corruption), local, remote_
+write, on, remote_apply. fsync/full_page_writes off risk corruption -
+never in production.
+REAL-WORLD: Per-transaction synchronous_commit=off for telemetry inserts.
+
+------------------------ D. LOCKING AND CONCURRENCY ----------------------
+
+P25. Explain the PostgreSQL lock hierarchy.
+A.  Spinlocks (shared-memory primitives), LWLocks (buffer mapping, WAL
+insert, etc.; LWLock waits in pg_stat_activity), heavyweight locks (relation
+locks in 8 modes, tuple/transactionid/advisory, deadlock detection), and
+predicate locks for SSI. Row locks live in tuples (xmax + infomask) with
+multixacts for shared locks, so no in-memory lock table for rows.
+REAL-WORLD: Distinguished Lock:transactionid waits (app contention) from
+LWLock:WALInsert (write contention) while triaging.
+
+P26. How is SERIALIZABLE implemented?
+A.  Serializable Snapshot Isolation (SSI): snapshot isolation plus
+predicate locks tracking read-write dependencies; if a dangerous structure
+(two consecutive rw-antidependencies forming a cycle) is detected, a
+transaction aborts with 40001. Needs retry logic; has memory overhead
+(max_pred_locks_per_transaction).
+REAL-WORLD: Used SERIALIZABLE for a funds allocation procedure with retry
+wrapper; no need for explicit locks.
+
+P27. Why can ALTER TABLE cause an outage even if it's quick?
+A.  It needs ACCESS EXCLUSIVE lock. If a long query holds a conflicting
+lock, ALTER waits - and all later queries queue behind the ALTER. Use
+lock_timeout, retry loop, avoid DDL during long transactions, and consider
+operations that need weaker locks (CREATE INDEX CONCURRENTLY, ADD
+CONSTRAINT NOT VALID).
+REAL-WORLD: Introduced a migration runner that sets lock_timeout=2s and
+retries with backoff.
+
+P28. Subtransactions: where do they come from and what is the problem?
+A.  SAVEPOINTs and PL/pgSQL EXCEPTION blocks create subtransactions with own
+xids (allocated lazily when they write). Each backend caches up to 64
+subxids in the proc array; beyond that, snapshots are marked "suboverflowed"
+and visibility checks hit pg_subtrans (SLRU) heavily, causing contention
+(LWLock:SubtransSLRU) and slowdowns, especially on replicas.
+REAL-WORLD: Removed per-row EXCEPTION blocks in a loop and ORM savepoints;
+latency stabilized.
+
+---------------------------- E. INDEXES AND STORAGE ----------------------
+
+P29. B-tree internals in PostgreSQL?
+A.  Lehman-Yao style B+-tree; leaf pages hold (key, TID), linked siblings;
+page splits when full; deduplication of equal keys (PG13), bottom-up
+deletion to reduce version churn (PG14). Indexes are unversioned: each
+index entry points to a heap TID, so update of an indexed column inserts
+new entries; dead entries removed by vacuum. Bloat appears from deleted
+rows and splits - REINDEX CONCURRENTLY fixes.
+REAL-WORLD: Rebuilt a 120 GB bloated index concurrently, cutting it to 40 GB
+and reducing IO.
+
+P30. GIN, GiST, SP-GiST, BRIN - how do they work internally?
+A.  GIN: inverted index key -> posting list/tree of TIDs; fastupdate pending
+list for writes. GiST: balanced tree with generalizable predicates (ranges,
+geometry, KNN, exclusion constraints). SP-GiST: space-partitioned (tries,
+quadtrees). BRIN: stores min/max (or other summary) per range of pages;
+tiny but only effective if physical order correlates with values.
+REAL-WORLD: Tuned gin_pending_list_limit and fastupdate for a high-write
+JSONB table.
+
+P31. How are system catalogs and OIDs organized?
+A.  Catalogs are normal tables (pg_class: relations; pg_attribute: columns;
+pg_index; pg_proc; pg_type; pg_namespace; pg_stats view). Files are named by
+relfilenode (changes on rewrite like VACUUM FULL, TRUNCATE, some ALTERs).
+pg_relation_filepath() shows path. Template databases (template0/template1)
+are used to create new DBs.
+REAL-WORLD: Used catalog queries to find missing FK indexes and unused
+indexes.
+
+P32. How do tablespaces, databases, schemas and roles relate?
+A.  Cluster -> databases (isolated; cross-database queries not possible without
+FDW/dblink) -> schemas (namespaces) -> objects. Roles are cluster-wide
+(users and groups are both roles). Tablespaces are directories mapped to
+filesystems for placing tables/indexes. Oracle's "schema = user" model
+differs: PG schemas are separate from roles.
+REAL-WORLD: Used schema-per-tenant for 200 tenants with a shared role model.
+
+P33. Partitioning internals?
+A.  Declarative partitions are separate tables attached to a partitioned
+parent (no data in parent). Planner prunes at plan and execution time.
+Each partition has its own indexes, vacuum, statistics (analyze the parent for
+the global view too). No global indexes; unique keys must include partition
+key. Too many partitions increase planning/memory.
+REAL-WORLD: 400 daily partitions worked; 20,000 did not - moved to weekly.
+
+P34. How does parallel query work?
+A.  The leader process plans a Gather node; the postmaster launches parallel
+workers (dynamic background workers; limits: max_parallel_workers_per_
+gather, max_parallel_workers, max_worker_processes) that run the same plan
+subtree on a share of work (parallel seq scan splits blocks; parallel hash
+join shares a hash table), returning tuples through shared-memory queues.
+Writes (except some utility commands like CREATE INDEX) aren't parallel.
+REAL-WORLD: Parallel index build cut a 6-hour index creation to 1.5 hours.
+
+P35. Extensibility architecture: extensions, hooks, FDW, access methods?
+A.  Extensions package SQL objects + shared libraries (CREATE EXTENSION).
+Hooks allow intercepting planner/executor (pg_stat_statements, auto_explain).
+FDWs access external sources (postgres_fdw, oracle_fdw, file_fdw). Pluggable
+index AMs and (since PG12) table access methods; procedural languages.
+This is a key reason PostgreSQL powers many forks and specialized
+databases.
+REAL-WORLD: Used postgres_fdw with pushdown for cross-database reports and
+pg_partman for partition maintenance.
+
+P36. What is async I/O in newer PostgreSQL (PG18)?
+A.  PG18 introduced an asynchronous I/O subsystem (io_method = worker, io_uring
+or sync) so backends can issue multiple reads concurrently for scans,
+bitmap heap scans and vacuum, improving throughput on cloud/network storage.
+Know your version: earlier releases relied on OS readahead and
+effective_io_concurrency prefetch hints.
+REAL-WORLD: Benchmarked seq scans on EBS-like storage before/after enabling
+async I/O in a test cluster.
+
+------------------------- F. REPLICATION, BACKUP, HA ---------------------
+
+P37. Streaming replication internals?
+A.  Standby's WAL receiver connects to primary's WAL sender, streams WAL;
+startup process replays. Hot standby allows reads; replay can conflict with
+queries (vacuum cleanup removing rows needed by standby queries) -> query
+cancellation unless max_standby_streaming_delay/hot_standby_feedback are
+set (feedback may cause primary bloat). Sync replication via
+synchronous_standby_names with quorum options.
+REAL-WORLD: Long reporting queries on replica were cancelled; used a
+dedicated replica with larger delay.
+
+P38. Replication slots - benefits and dangers?
+A.  Slots ensure the primary retains WAL (and catalog xmin for logical) until
+the consumer confirms. Dangers: abandoned/lagging slot fills pg_wal and
+disk, and holds back vacuum. Monitor pg_replication_slots (restart_lsn,
+wal_status), set max_slot_wal_keep_size, drop unused slots.
+REAL-WORLD: Disk hit 100% from a dead logical slot; dropped it and added
+alerting.
+
+P39. Logical decoding and logical replication?
+A.  WAL with wal_level=logical is decoded by an output plugin (pgoutput,
+wal2json) into row changes per transaction, delivered via slots. Logical
+replication publishes tables; subscribers apply changes. Needs replica
+identity (PK) for UPDATE/DELETE; DDL, sequences and large objects aren't
+replicated automatically. Used for upgrades, CDC (Debezium), selective sync.
+REAL-WORLD: Upgraded PG13 to PG16 with logical replication and a
+5-minute cutover.
+
+P40. Backup strategies and PITR?
+A.  Logical: pg_dump (consistent snapshot, portable, slower for restore).
+Physical: pg_basebackup/pgBackRest/Barman + WAL archiving => PITR to a
+timestamp/LSN/named restore point (recovery_target_time + recovery signal
+files). PG17+ supports incremental base backups. Always test restores and
+measure RTO; verify with pg_verifybackup; encrypt and store off-site.
+REAL-WORLD: Restored a PITR clone to just before an accidental DELETE and
+copied rows back.
+
+P41. HA and failover: how does Patroni work and what is split-brain?
+A.  Patroni uses a distributed consensus store (etcd/Consul/ZooKeeper) to
+elect a leader and holds a leader key with TTL. If the leader can't renew,
+a replica promotes; old primary is demoted or rewound (pg_rewind).
+Fencing and synchronous replication settings reduce split-brain/data
+loss. Applications reach the leader via HAProxy/virtual IP/DNS/
+pgbouncer.
+REAL-WORLD: Practiced switchover and failover drills and tuned TTL and
+loop_wait to avoid flapping.
+
+P42. Upgrade options?
+A.  pg_upgrade (in-place; --link for seconds-to-minutes downtime; then ANALYZE
+or rely on carried-over stats in newer versions), dump/restore (simple but
+slow), logical replication (near-zero downtime). Test extensions
+compatibility, check release notes, collations (glibc changes can corrupt
+indexes), and have a rollback.
+REAL-WORLD: Upgraded a 5 TB database with pg_upgrade --link in under 15
+minutes of downtime.
+
+----------------------- G. OPERATIONS AND TROUBLESHOOTING ----------------
+
+P43. Configuration files and parameter contexts?
+A.  postgresql.conf, postgresql.auto.conf (ALTER SYSTEM), pg_hba.conf (host/
+user/db/method rules, top-down first match), pg_ident.conf. Contexts
+(pg_settings.context): postmaster (restart), sighup (reload), superuser/
+user. Overrides: ALTER ROLE/DATABASE SET, SET LOCAL.
+REAL-WORLD: Changed shared_buffers in a maintenance window since it needs
+restart; others via pg_reload_conf().
+
+P44. Startup and shutdown modes?
+A.  Start via pg_ctl/systemd: reads config, creates shared memory,
+startup process does recovery, then accepts connections. Shutdown: smart
+(waits for clients), fast (default: disconnect clients, rollback, clean
+checkpoint), immediate (abort-like, requires crash recovery on next
+start).
+REAL-WORLD: Ran CHECKPOINT before a fast shutdown to shorten it.
+
+P45. What does pg_stat_statements track and how?
+A.  Per normalized query (queryid): calls, total/mean time, rows, shared/
+local/temp blocks hit/read/written, WAL, plan time (if enabled). Stored in
+shared memory hash table loaded via shared_preload_libraries. Reset
+periodically; capture snapshots externally for trending (no AWR built in).
+REAL-WORLD: Exported pg_stat_statements snapshots hourly to build AWR-like
+history.
+
+P46. Cumulative statistics system (PG15 change)?
+A.  Before PG15 a stats collector process received UDP-like messages and
+wrote stats files; from PG15 stats live in shared memory (faster, no
+collector, flushed at shutdown/checkpoints). Views: pg_stat_database, user_
+tables/indexes, io (PG16), wal, bgwriter, replication, progress views.
+REAL-WORLD: Used n_dead_tup and last_autovacuum to monitor vacuum health.
+
+P47. Authentication and security architecture?
+A.  pg_hba.conf selects method (scram-sha-256, cert, gss/ldap, peer).
+Roles with attributes and inheritance, GRANT on objects/columns, default
+privileges, RLS, SECURITY DEFINER functions, TLS, pgaudit, pgcrypto, TDE
+isn't in core (use disk/volume encryption or vendor builds).
+REAL-WORLD: Replaced md5 with scram-sha-256 and disabled trust rules.
+
+P48. Sequences and identity internals?
+A.  A sequence is a special one-row relation; nextval is non-transactional and
+logs to WAL in advance (every 32 values) so after crash it may skip
+numbers. CACHE per session leaves gaps. Identity columns use an owned
+sequence.
+REAL-WORLD: Explained gaps to auditors and used a counter table for
+legally gap-free numbers.
+
+P49. Temp files, spills and temp tables?
+A.  Sorts/hashes exceeding work_mem spill to base/pgsql_tmp (log_temp_files,
+EXPLAIN shows Disk usage); temp tables live in temp_buffers/local files per
+session, not WAL-logged, dropped at session end (vacuum doesn't auto-
+vacuum them - run ANALYZE manually). temp_file_limit protects disk.
+REAL-WORLD: Set temp_file_limit for ad hoc users after one query filled disk.
+
+P50. Prepared transactions (2PC)?
+A.  PREPARE TRANSACTION persists transaction state until COMMIT PREPARED;
+needs max_prepared_transactions > 0. Orphaned prepared transactions hold
+locks and block vacuum/freezing - monitor pg_prepared_xacts.
+REAL-WORLD: A forgotten prepared transaction stalled autovacuum for weeks.
+
+--------------------------- H. SCENARIO QUESTIONS ------------------------
+
+P51. Database is slow suddenly. What is your approach?
+A.  1) pg_stat_activity: active vs idle in transaction, wait events, longest
+queries. 2) Locks: pg_blocking_pids. 3) System: CPU, IO wait, memory/swap,
+disk latency. 4) pg_stat_statements top queries and plan changes. 5)
+Checkpoint/WAL (pg_stat_bgwriter/io, logs). 6) Autovacuum activity or
+bloat. 7) Connection storm/pooler saturation. Mitigate (cancel offender,
+kill blockers) then RCA.
+REAL-WORLD: A connection storm after a deploy exhausted max_connections;
+pooler limits and backoff fixed it.
+
+P52. pg_wal is filling the disk. Causes?
+A.  Inactive/lagging replication slot, archiver failing (archive_command
+errors), standby down with wal_keep_size, long checkpoint settings
+(max_wal_size too large relative to disk), heavy write burst. Check
+pg_replication_slots, pg_stat_archiver, logs. Never delete WAL files
+manually; fix the cause (drop slot, repair archive).
+REAL-WORLD: Fixed a broken archive_command permission and ran pg_switch_wal;
+WAL drained.
+
+P53. Autovacuum can't keep up and bloat grows. What do you do?
+A.  Identify blockers (xmin horizon), check cost throttling, per-table
+thresholds, worker count, long transactions, high update churn without HOT,
+maintenance_work_mem. Lower scale factors, increase cost limit, raise
+fillfactor headroom, schedule manual VACUUM, use pg_repack for existing
+bloat. Check I/O capacity.
+REAL-WORLD: Reduced table bloat from 70% to 10% in two weeks with tuning
+plus one-time repack.
+
+P54. Backend killed by the OOM killer. What next?
+A.  Check dmesg/journal, sum potential memory: connections x work_mem x
+hash/sort nodes, maintenance_work_mem x autovacuum workers, parallel workers
+each using work_mem, shared_buffers + huge pages. Fix: pooling, lower
+work_mem globally and raise per-session, vm.overcommit_memory=2 with
+sensible overcommit_ratio, use huge_pages, container memory limits.
+REAL-WORLD: OOM events stopped after capping work_mem at 16 MB and
+using pooling.
+
+P55. How would you explain PostgreSQL architecture in 2 minutes?
+A.  "The postmaster forks a backend per connection. Backends share
+shared_buffers and WAL buffers. Every change is WAL-logged before data pages
+are written; commit is a WAL flush. MVCC stores row versions in the heap
+(xmin/xmax), so updates create new tuples and VACUUM cleans old ones; that
+makes long transactions and replication slots the main sources of bloat.
+Crash recovery is WAL replay only. The planner is cost-based per session,
+no shared plan cache. Replication ships WAL (physical) or decoded changes
+(logical); HA uses external tools like Patroni; extensibility is a core
+strength."
+
+
+##########################################################################
+# PART 5: ORACLE vs POSTGRESQL - ARCHITECTURE & PROCESS DIFFERENCES
+##########################################################################
+
+==========================================================================
+ 5.1 ONE-PAGE MENTAL MODEL
+==========================================================================
+ ORACLE                                  POSTGRESQL
+ ------                                  ----------
+ Instance + Database                     Cluster (postmaster + PGDATA)
+ Dedicated server proc per session       Backend process per connection
+ (threaded model optional in 12c+)       (forked from postmaster)
+ SGA (buffer cache, shared pool,         shared_buffers + WAL buffers +
+   redo buffer) + PGA                      local work_mem per backend
+ Shared SQL/plan cache (library cache)   No shared plan cache (per-session)
+ Undo segments hold OLD versions         Heap holds OLD versions (dead tuples)
+ Rollback via undo                       Rollback = just mark xid aborted
+ Redo log (circular, groups)             WAL (segments, recycled/archived)
+ Commit = LGWR flush                     Commit = WAL flush (+ pg_xact bit)
+ Crash recovery: roll forward + back     Crash recovery: WAL replay only
+ DBWn + CKPT                             bgwriter + checkpointer
+ SMON/PMON housekeeping                  autovacuum + postmaster/startup
+ ORA-01555 (undo too small)              Bloat / vacuum blocked
+ Data dictionary (SYS), V$ views         System catalogs (pg_*), pg_stat_* views
+ AWR/ASH/ADDM (licensed)                 pg_stat_statements, logs, extensions
+ RAC (shared-everything)                 Streaming replicas (shared-nothing)
+ Data Guard                              Streaming/logical replication + Patroni
+ RMAN                                    pg_basebackup/pgBackRest/Barman + WAL
+
+==========================================================================
+ 5.2 SIDE-BY-SIDE DETAIL
+==========================================================================
+
+[1] PROCESS MODEL
+ Oracle     : Listener hands connections to dedicated server processes (or
+              shared server/DRCP). Many fixed background processes per
+              instance (DBWn, LGWR, CKPT, SMON, PMON, ...). On Linux a
+              multithreaded model (THREADED_EXECUTION) is available in 12c+.
+ PostgreSQL : postmaster forks one backend per connection; a small set of
+              background processes. Crash of a backend restarts all.
+ Impact     : PG needs a pooler earlier; Oracle copes with many sessions
+              better but also benefits from pooling.
+
+[2] MEMORY
+ Oracle     : SGA shared (buffer cache, shared pool, redo buffer, etc.),
+              PGA private with automatic work-area management against a
+              global target (PGA_AGGREGATE_TARGET/LIMIT).
+ PostgreSQL : shared_buffers (smaller share of RAM; relies on OS cache),
+              per-node work_mem with no global cap - you must reason about
+              multiplication yourself.
+ Impact     : Oracle memory is globally governed; PG memory can overshoot
+              if connections x work_mem are not controlled.
+
+[3] CACHING AND I/O
+ Oracle     : Manages most caching itself (direct I/O/ASM typical), multiple
+              pools, direct path reads for large scans, Smart Flash Cache.
+ PostgreSQL : Buffered I/O (double buffering with OS cache), ring buffers for
+              big scans/vacuum. PG18 adds async I/O.
+ Impact     : PG performance depends heavily on OS tuning (page cache,
+              readahead, huge pages, dirty ratios).
+
+[4] ROW VERSIONING (MOST IMPORTANT DIFFERENCE)
+ Oracle     : Current row version in table block; older versions rebuilt
+              from UNDO on demand (consistent read). Updates are in-place.
+ PostgreSQL : Each UPDATE writes a NEW tuple in the heap; old tuples remain
+              until VACUUM. Visibility by xmin/xmax + snapshots.
+ Impact     :
+   - Oracle: tables don't bloat from updates; risk is ORA-01555 and undo
+     sizing; rollback of large transactions is slow (applies undo).
+   - PG: ROLLBACK is instant; but updates cost more space/WAL (index
+     entries too unless HOT) and VACUUM is a core operational duty;
+     long transactions cause bloat.
+
+[5] REDO vs WAL
+ Oracle     : Redo logs = change vectors for data AND undo blocks; circular
+              groups; archived in ARCHIVELOG mode; used by Data Guard.
+ PostgreSQL : WAL = record of page changes (plus full page images after
+              checkpoint); segments are archived/recycled; used for
+              recovery, PITR, streaming and logical replication.
+ Impact     : PG full-page writes increase WAL after checkpoints; Oracle
+              logs undo too, increasing redo for updates.
+
+[6] COMMIT, CHECKPOINT, CRASH RECOVERY
+ Oracle     : LGWR flush on commit; incremental checkpointing with MTTR
+              target; recovery = roll forward (redo) then roll back (undo).
+ PostgreSQL : WAL flush on commit; periodic spread checkpoints; recovery =
+              WAL replay only (no undo phase).
+ Impact     : PG recovery time is bounded by checkpoint distance; Oracle
+              additionally may need rollback time for big in-flight txns.
+
+[7] READ CONSISTENCY
+ Oracle     : Statement-level (RC) or transaction-level (serializable/
+              read-only) via SCN + undo. "Snapshot too old" possible.
+ PostgreSQL : Snapshot per statement (RC) or per transaction (RR/SERIAL.).
+              Never "snapshot too old" in core (the old_snapshot_threshold
+              feature was removed), but vacuum may be blocked by old snapshots.
+
+[8] LOCKING AND ISOLATION
+ Oracle     : Row lock info in block (ITL + lock byte), no escalation;
+              TM/TX enqueues; latches/mutexes. Isolation: RC, SERIALIZABLE
+              (snapshot-based, ORA-08177), READ ONLY.
+ PostgreSQL : Row locks in tuple header (xmax/infomask) + multixact; table
+              lock modes (8 levels); advisory locks; SSI for SERIALIZABLE
+              with 40001 retries; RR = snapshot isolation.
+ Impact     : Both: readers don't block writers. Gotchas: PG DDL lock
+              queues (lock_timeout), Oracle unindexed FK locks/ITL waits.
+
+[9] SQL PARSING AND PLAN CACHE
+ Oracle     : Shared pool library cache - plans shared across sessions,
+              hard/soft parse, bind peeking, ACS, SQL plan baselines.
+ PostgreSQL : No global plan cache; each backend plans per statement unless
+              prepared; generic vs custom plans; poolers affect reuse.
+ Impact     : Oracle needs binds to avoid shared-pool pressure; PG planning
+              cost matters for very short queries (use prepared statements).
+
+[10] OPTIMIZER AND HINTS
+ Oracle     : Rich CBO with adaptive features, SQL profiles, baselines,
+              hints widely used, dynamic sampling.
+ PostgreSQL : Cost-based, no native hints (pg_hint_plan extension), no plan
+              baselines; fixes via stats, indexes, SQL rewrite, settings.
+ Impact     : PG tuning = better stats/SQL; Oracle tuning may use hints/SPM.
+
+[11] STATISTICS AND DIAGNOSTICS
+ Oracle     : AWR/ASH/ADDM/SQL Monitor/10046 trace (Diagnostics Pack
+              licenses), V$ views.
+ PostgreSQL : pg_stat_statements, pg_stat_*, auto_explain, logs/pgBadger,
+              EXPLAIN (ANALYZE, BUFFERS); history needs external tooling.
+
+[12] SPACE MANAGEMENT
+ Oracle     : Segments/extents, ASSM, HWM, SHRINK/MOVE, undo/temp tablespaces,
+              rebuild online. Row migration/chaining.
+ PostgreSQL : Heap files + FSM/VM, VACUUM, bloat, pg_repack, fillfactor,
+              TOAST, HOT. No HWM concept for deletes except trailing page
+              truncation.
+
+[13] INDEXING
+ Oracle     : B-tree, bitmap, function-based, reverse key, IOT, cluster,
+              domain indexes, global/local partitioned indexes, index
+              compression. Does not index all-NULL keys in B-tree.
+ PostgreSQL : B-tree, hash, GIN, GiST, SP-GiST, BRIN, partial, expression,
+              covering (INCLUDE); indexes store NULLs; no bitmap persistent
+              index (bitmap scans are runtime), no IOT (CLUSTER is one-time).
+              Index entries carry no visibility info -> heap checks (VM helps).
+
+[14] PARTITIONING
+ Oracle     : Range/list/hash/composite/interval/reference/auto-list; global
+              indexes supported incl. global partitioned; online ops; option
+              license needed (Enterprise Edition + Partitioning option).
+ PostgreSQL : Range/list/hash declarative; no global indexes; unique keys must
+              include partition key; free and built-in.
+
+[15] PROCEDURAL CODE
+ Oracle     : PL/SQL with packages (state, init blocks), autonomous
+              transactions, BULK COLLECT/FORALL, compile-time dependency
+              checking, pipelined functions, wrapped code.
+ PostgreSQL : PL/pgSQL (+ PL/Python, etc.), schemas/extensions instead of
+              packages, no autonomous transactions, late binding (runtime
+              errors), procedures with COMMIT (PG11+), RETURN QUERY.
+
+[16] USERS, SCHEMAS, DATABASES
+ Oracle     : Schema = user. One database (or CDB with PDBs) per instance;
+              multitenant option for consolidation.
+ PostgreSQL : Many databases per cluster; schemas separate from roles; roles
+              are cluster-wide; no cross-database queries without FDW.
+
+[17] HIGH AVAILABILITY / SCALING
+ Oracle     : RAC (active-active shared storage), Data Guard, GoldenGate,
+              ASM, Application Continuity.
+ PostgreSQL : Streaming/logical replication, Patroni/repmgr, read replicas;
+              sharding via Citus/partitioning/FDW; no built-in active-active
+              multi-writer for one database.
+
+[18] BACKUP AND RECOVERY
+ Oracle     : RMAN (block-level incremental via change tracking), Flashback
+              (Query/Table/Database), Data Guard.
+ PostgreSQL : pg_dump + physical backups + WAL PITR (pgBackRest/Barman);
+              PG17 incremental; no flashback (use PITR clone or logical
+              backups/temporal design).
+
+[19] PARALLELISM
+ Oracle     : PX servers with QC, parallel DML/DDL, auto DOP, Resource Manager.
+ PostgreSQL : parallel workers for reads/joins/aggregates/index builds;
+              parallel DML limited (not for general writes).
+
+[20] SCHEDULING / JOBS
+ Oracle     : DBMS_SCHEDULER built in (CJQ0/Jnnn).
+ PostgreSQL : external or extension (pg_cron, pgAgent).
+
+[21] SECURITY
+ Oracle     : TDE, Database Vault, VPD, Unified Audit, Data Redaction,
+              Label Security (options licensed).
+ PostgreSQL : RLS, pgaudit, SCRAM, TLS; TDE not in community core
+              (OS/volume encryption or vendor builds).
+
+[22] UPGRADES, PATCHING, LICENSING
+ Oracle     : RU/PSU patches, AutoUpgrade, rolling patching with RAC/ASM,
+              license by core/feature (cost).
+ PostgreSQL : Minor releases are binary swaps; major upgrades via pg_upgrade
+              or logical replication; open source (cost is people/support).
+
+[23] DATA TYPES AND SQL DIALECT
+ Oracle     : '' = NULL, DATE has time, VARCHAR2/NUMBER, ROWNUM, (+) joins,
+              CONNECT BY, sequences with NEXTVAL, DUAL, MERGE (old).
+ PostgreSQL : '' <> NULL, DATE no time, text/varchar/numeric/timestamptz,
+              LIMIT/FETCH, ANSI joins, WITH RECURSIVE, no DUAL, arrays/
+              JSONB/range/enum types, ON CONFLICT, MERGE since PG15.
+
+[24] CONNECTION POOLING
+ Oracle     : UCP/DRCP/shared server, Proxy Authentication.
+ PostgreSQL : PgBouncer/pgcat/Odyssey; transaction-mode pooling needs
+              session-stateless apps.
+
+==========================================================================
+ 5.3 WHAT HAPPENS ON UPDATE + COMMIT - DIRECT COMPARISON
+==========================================================================
+ ORACLE
+   1. Read block into buffer cache; lock row (ITL + lock byte).
+   2. Write old value to UNDO; generate redo for undo+data.
+   3. Modify row IN PLACE in the block.
+   4. COMMIT: LGWR writes redo; locks released; done.
+   5. ROLLBACK: apply undo (time proportional to work done).
+   6. Readers needing old version: build CR block from undo.
+
+ POSTGRESQL
+   1. Read page into shared_buffers; check row visibility; lock row (xmax).
+   2. Insert NEW tuple version (same page if HOT possible); set old xmax.
+   3. WAL records for heap change (+ index inserts if needed).
+   4. COMMIT: WAL flush; pg_xact marked committed.
+   5. ROLLBACK: pg_xact marked aborted (instant); dead tuples cleaned by
+      VACUUM.
+   6. Readers just use snapshot to pick the visible tuple version.
+
+==========================================================================
+ 5.4 WHAT HAPPENS AT CRASH - DIRECT COMPARISON
+==========================================================================
+ ORACLE     : SMON roll-forward (redo) -> open -> roll-back using undo.
+ POSTGRESQL : Startup process WAL replay from last checkpoint -> open.
+              Uncommitted work is simply invisible.
+
+==========================================================================
+ 5.5 COMPARISON INTERVIEW QUESTIONS (C1-C25)
+==========================================================================
+
+C1. Biggest architectural difference between Oracle and PostgreSQL?
+A.  Row version storage and concurrency control. Oracle updates in place and
+keeps old versions in undo (rebuilt on demand); PostgreSQL appends new tuple
+versions in the heap and uses VACUUM. This drives everything else: bloat vs
+ORA-01555, rollback speed, WAL/redo volume, index maintenance, HOT, and ops
+practices.
+REAL-WORLD: I explained it to a team migrating from Oracle so they planned
+vacuum monitoring on day one.
+
+C2. Why is rollback instant in PostgreSQL but slow in Oracle?
+A.  PG rollback marks the xid aborted; its tuples remain invisible (cleanup
+later). Oracle must apply undo records to restore blocks, so a 1-hour
+transaction can take comparable time to roll back (and recovery needs it).
+REAL-WORLD: Killing a huge Oracle batch took 40 minutes to roll back; the
+PG equivalent returned immediately but vacuum cleaned afterwards.
+
+C3. Why does PostgreSQL need VACUUM and Oracle doesn't?
+A.  Dead tuple versions live in the PG heap/indexes; they must be reclaimed
+and xids frozen. Oracle's old versions live in undo, which is self-managed
+(overwritten after retention). Oracle has analogous housekeeping
+(shrink, stats, cleanout) but not table-level vacuum.
+
+C4. Compare ORA-01555 with PostgreSQL's equivalents.
+A.  Oracle: snapshot too old when undo overwritten. PostgreSQL: query
+conflicts on standbys (canceling due to conflict with recovery), vacuum
+removing rows needed by old snapshots is prevented by horizon; bloat is
+the price. PG's removed old_snapshot_threshold feature mimicked 01555.
+
+C5. How do commits compare (log file sync vs WAL flush)?
+A.  Both require sequential log flush before acknowledging. Oracle
+"log file sync" with LGWR group commit; PG WAL fsync with group commit via
+commit_delay/siblings and WALWriter. Both can use asynchronous commit
+(COMMIT WRITE NOWAIT / synchronous_commit=off). Diagnose via wait events
+(Oracle: log file sync/parallel write; PG: IO:WALSync/WALWrite).
+
+C6. Compare memory management philosophy.
+A.  Oracle manages a large SGA and PGA globally with auto-tuning; PG keeps
+moderate shared_buffers and trusts the OS cache, with per-operation work_mem.
+Oracle DBA mindset: size SGA/PGA. PG: size shared_buffers modestly, control
+connections and work_mem, tune OS.
+
+C7. Plan caching: how do the two differ and what does it mean for developers?
+A.  Oracle shares cursors across sessions (bind variables vital to avoid
+hard parse storms). PG has per-session plan caching only for prepared
+statements/PL/pgSQL; every new connection re-plans, so use pooling +
+prepared statements. Bind peeking (Oracle) vs custom/generic plans (PG)
+are the analogous plan-stability issues.
+
+C8. How do hints and plan stability differ?
+A.  Oracle: hints, SQL profiles, SQL plan baselines, outlines. PG: no hints
+in core, rely on stats/extended stats/index/SQL rewrite, config flags,
+pg_hint_plan, or application-level query shape. PG teams invest more in
+statistics quality and schema design.
+
+C9. How do transaction isolation levels compare?
+A.  Both default to READ COMMITTED without dirty reads. Oracle SERIALIZABLE
+is snapshot isolation (write skew possible) and errors ORA-08177. PG
+REPEATABLE READ is snapshot isolation; PG SERIALIZABLE is true SSI preventing
+write skew (with 40001 retries). Oracle has READ ONLY transactions.
+
+C10. Locking: how do large row-lock counts behave in each?
+A.  Oracle stores lock state in blocks (no memory cost, no escalation).
+PG stores row locks in tuples; locking many rows writes to heap pages
+(dirtying them, generating WAL) - SELECT FOR UPDATE on millions of rows is
+expensive. Multixacts add cost for shared locks.
+
+C11. Compare index behavior on UPDATE.
+A.  Oracle updates in place; index entries change only if the indexed
+column changes (delete+insert in index). PG creates a new heap tuple, so
+every index needs a new entry unless HOT applies (no indexed column change +
+space in page). This is why index count and fillfactor matter more in PG
+write-heavy workloads.
+
+C12. Compare how each handles large deletes/purges.
+A.  Both: avoid giant DELETEs; use partition drop. Oracle: undo and redo
+heavy, rollback slow; HWM remains until shrink. PG: dead tuples + vacuum,
+WAL heavy; space reuse after vacuum, not returned to OS (unless trailing
+pages or VACUUM FULL/repack). Partition DROP/DETACH is best in both.
+
+C13. Backup/recovery comparison - RMAN vs PG tools?
+A.  RMAN: integrated, block-level incrementals, validation, catalog, block
+media recovery, Flashback. PG: pg_basebackup/pgBackRest/Barman, WAL
+archiving, PITR, pg_dump for logical; PG17 incremental; no flashback.
+Both require tested restores and defined RPO/RTO.
+
+C14. HA: RAC vs PostgreSQL clustering?
+A.  RAC provides active-active access to one database with Cache Fusion on
+shared storage (scale-out for some workloads, HA with fast failover).
+PostgreSQL uses a single primary with replicas (shared-nothing) and
+failover managers; scale reads with replicas, writes with sharding/
+partitioning/Citus or by scaling up. Different failure and scaling models.
+
+C15. Data Guard vs streaming replication?
+A.  Both ship redo/WAL to standbys. Data Guard adds Broker, protection modes,
+Fast-Start Failover, logical standby and Active Data Guard licensing.
+PG streaming replication is built in; failover automation needs Patroni/
+repmgr; sync replication is configurable via synchronous_standby_names.
+
+C16. Procedural language differences important in migration?
+A.  Packages (spec/body, state) vs schemas/extensions; autonomous
+transactions; BULK COLLECT/FORALL vs set-based/unnest; exception handling
+semantic (PG subtransaction cost); %TYPE/%ROWTYPE exist in both; cursors
+and ref cursors differ; PL/SQL compile-time checks vs PG runtime;
+DBMS_* packages (DBMS_OUTPUT, UTL_FILE, DBMS_SCHEDULER, DBMS_LOCK) need
+replacements (RAISE NOTICE, COPY/file_fdw, pg_cron, advisory locks).
+
+C17. How do temp tables differ?
+A.  Oracle global temporary tables: permanent definition, session/transaction-
+private data (private temp tables in 18c+). PG temp tables: created per session
+and dropped at session end; no global definition; need ANALYZE manually.
+
+C18. Sequences and identity differences?
+A.  Oracle sequences (CACHE, ORDER for RAC, NEXTVAL pseudo-column);
+12c identity. PG sequences are relations; nextval function; identity (PG10);
+no sequence reset on rollback in both; PG logs 32 values ahead.
+
+C19. Statistics and monitoring: AWR vs PG?
+A.  AWR keeps history automatically (licensed); PG keeps cumulative counters
+only; you build history via pg_stat_statements snapshots, Prometheus/
+Grafana, pgBadger, or commercial tools (pganalyze, pgwatch). Wait-event
+interface exists in both (V$ACTIVE_SESSION_HISTORY vs pg_stat_activity
+sampling by extensions such as pg_wait_sampling).
+
+C20. Space and storage: tablespaces, datafiles vs PG files?
+A.  Oracle: tablespaces of datafiles holding segments, with undo and temp as
+special tablespaces and ASM option. PG: one file (1 GB segments) per
+relation fork in a directory per database; tablespaces map to directories;
+temp in per-DB pgsql_tmp; no undo space.
+
+C21. Multitenancy comparison?
+A.  Oracle CDB/PDB (option) shares one instance with isolated PDBs. PG:
+multiple databases per cluster (shared processes/WAL, separate catalogs) or
+schema-per-tenant/RLS or separate clusters; cross-DB queries not native.
+
+C22. When would you pick Oracle vs PostgreSQL (honest answer)?
+A.  Oracle: need RAC active-active, advanced partitioning/global indexes,
+mature enterprise features (Data Guard, flashback, Exadata), existing
+PL/SQL investment, strict vendor support. PostgreSQL: cost, flexibility,
+extensions (PostGIS, TimescaleDB, pgvector), cloud-native, open standards,
+strong JSON/SQL features, avoiding licensing lock-in. Decide with
+workload, team skills, compliance and TCO.
+
+C23. Key risks when migrating Oracle -> PostgreSQL?
+A.  Empty string/NULL semantics, DATE/timestamp, sequences, packages,
+autonomous transactions, hierarchical queries, optimizer hints, ROWNUM/
+ROWID logic, outer join (+), date arithmetic, case sensitivity of
+identifiers, locking/isolation behavior differences, operational shift
+(vacuum, pooling), data type mapping (NUMBER -> numeric/int/bigint),
+performance regressions from untuned plans. Mitigate with assessment tools
+(ora2pg, AWS SCT), phased cutover, parallel run, performance baselines.
+
+C24. Oracle DBA habit that doesn't transfer to PostgreSQL (and vice versa)?
+A.  Oracle -> PG: "just throw a hint", "set SGA to 80% RAM", "ignore bloat",
+"unlimited sessions". PG -> Oracle: "ignore parse overhead / literals",
+"expect instant rollback", "no need for undo sizing", "avoid packages",
+"ignore license implications of features/options".
+
+C25. Explain, in one minute, how a transaction flows in both systems.
+A.  "Oracle: block in buffer cache, undo + redo generated, in-place change,
+commit flushes redo via LGWR, DBWn writes blocks later; readers rebuild old
+versions from undo. PostgreSQL: new tuple version inserted in heap, WAL
+logged, commit flushes WAL and flips the pg_xact bit; readers use snapshots
+to ignore invisible versions; VACUUM cleans dead versions later. Oracle
+pays at rollback/read time (undo), PostgreSQL pays at cleanup time
+(vacuum/bloat)."
+
+==========================================================================
+ 5.6 TERM GLOSSARY (ORACLE -> POSTGRESQL)
+==========================================================================
+ Instance                  -> Cluster / postmaster + shared memory
+ Database (physical)       -> PGDATA directory
+ SGA buffer cache          -> shared_buffers (+ OS page cache)
+ PGA work area             -> work_mem / maintenance_work_mem (per backend)
+ Shared pool/library cache -> (none global) per-backend plan/catalog caches
+ Redo log / archive log    -> WAL / archived WAL segments
+ Undo tablespace           -> (none) old versions in heap, cleaned by VACUUM
+ Control file              -> pg_control + system catalogs
+ Tablespace/datafile       -> tablespace/directory; relation files
+ Schema = user             -> schema (namespace) separate from role
+ SYS/SYSTEM                -> postgres superuser
+ DBA_/ALL_/USER_ views     -> pg_catalog tables, information_schema
+ V$ views                  -> pg_stat_*, pg_locks, pg_settings
+ SPFILE                    -> postgresql.conf / postgresql.auto.conf
+ Listener / tnsnames       -> postmaster listen_addresses / pg_hba.conf
+ DBWn                      -> background writer + checkpointer
+ LGWR                      -> WAL writer / backend WAL flush
+ CKPT                      -> checkpointer
+ SMON/PMON                 -> startup process / postmaster / autovacuum
+ ARCn                      -> archiver (archive_command)
+ AWR/ASH                   -> pg_stat_statements + external history
+ Flashback                 -> PITR clone, temporal design
+ Data Guard                -> streaming/logical replication + Patroni
+ RAC                       -> (no equivalent) replicas, sharding
+ RMAN                      -> pgBackRest / pg_basebackup / Barman
+ DBMS_SCHEDULER            -> pg_cron / external scheduler
+ Global temp table         -> TEMP table (session-scoped) / UNLOGGED table
+ ROWID                     -> ctid (not stable across updates/VACUUM FULL)
+ ROWNUM                    -> LIMIT / row_number()
+ DUAL                      -> (not needed) SELECT 1;
+ NVL / DECODE              -> COALESCE / CASE
+ SYSDATE                   -> now()/clock_timestamp() (timestamptz)
+ Autonomous transaction    -> dblink/pg_background workaround
+ Package                   -> schema + functions (+ extension)
+
+##########################################################################
+# PART 6: HOW TO PRESENT ARCHITECTURE ANSWERS (6+ YEARS)
+##########################################################################
+ 1. START WITH THE FLOW, THEN DRILL DOWN.
+    "A statement arrives, is parsed/planned, touches buffers, writes
+    redo/WAL, commits via a log flush; data pages are written later."
+ 2. TIE EVERY CONCEPT TO A SYMPTOM AND A FIX.
+    log file sync -> commit rate or slow redo disk -> batch commits.
+    idle in transaction -> vacuum blocked -> timeouts + fix app.
+ 3. USE NUMBERS FROM YOUR WORK.
+    Size of DB, TPS, connections, WAL/redo per hour, recovery time,
+    replica lag, bloat percentage, before/after runtime.
+ 4. KNOW THE FAILURE MODES.
+    Oracle: ORA-01555, ORA-04031, ORA-00257, ITL waits, hot blocks,
+            RAC gc waits.
+    PostgreSQL: bloat, xid wraparound, replication slot WAL growth,
+            lock queue on DDL, OOM from work_mem, subtransaction overflow.
+ 5. BE VERSION-AWARE.
+    Oracle 12c multitenant, 19c LTS, 23ai; PostgreSQL 12 CTE inlining,
+    13 dedup, 14 subxact/partition improvements, 15 MERGE + shared stats,
+    16 pg_stat_io, 17 incremental backup/JSON_TABLE, 18 async I/O.
+ 6. DRAW IT.
+    Practice sketching: client -> process -> memory -> log -> datafiles;
+    UPDATE/COMMIT flow; MVCC versions; checkpoint; replication topology.
+ 7. FINISH WITH A TRADE-OFF.
+    "Oracle pays for old versions at read/rollback time with undo; PostgreSQL
+    pays at cleanup time with vacuum. Which cost hurts depends on workload:
+    long-running readers and huge rollbacks vs high-churn updates."
+
+ PRACTICE PROMPTS (self-test):
+   - Explain what happens from COMMIT to disk in both databases.
+   - Why can a long transaction hurt PG vacuum but hurt Oracle via undo?
+   - How would you design DR for 15 min RPO in each?
+   - Walk me through diagnosing a sudden slowdown in each.
+   - How would you migrate a 2 TB Oracle schema with PL/SQL packages to PG?
+
+                              -- END OF DOCUMENT --
