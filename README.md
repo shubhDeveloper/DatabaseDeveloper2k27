@@ -467,6 +467,89 @@ Additional advanced subjects to study:
 
 ---
 
+---
+
+# 📁 Repository Structure
+
+```text
+Database_Developer_2k27/
+│
+├── SQL/
+│   ├── Fundamentals/
+│   ├── Joins/
+│   ├── Subqueries/
+│   ├── CTE/
+│   ├── Functions/
+│   ├── Window_Functions/
+│   ├── Advanced_SQL/
+│   └── Performance_Tuning/
+│
+├── Oracle_PL_SQL/
+│   ├── Fundamentals/
+│   ├── Variables_Data_Types/
+│   ├── Control_Statements/
+│   ├── Cursors/
+│   ├── Records_Collections/
+│   ├── Exception_Handling/
+│   ├── Procedures/
+│   ├── Functions/
+│   ├── Packages/
+│   ├── Triggers/
+│   ├── Dynamic_SQL/
+│   ├── Bulk_Processing/
+│   ├── Transactions/
+│   ├── Performance_Tuning/
+│   ├── File_Handling/
+│   └── Advanced_PL_SQL/
+│
+├── PostgreSQL/
+│   ├── SQL/
+│   ├── PLpgSQL/
+│   ├── Functions/
+│   ├── Procedures/
+│   ├── Triggers/
+│   └── Performance_Tuning/
+│
+├── MySQL/
+│   ├── SQL/
+│   ├── Stored_Procedures/
+│   ├── Functions/
+│   ├── Triggers/
+│   └── Performance_Tuning/
+│
+├── Python/
+│   ├── Fundamentals/
+│   ├── Data_Structures/
+│   ├── OOP/
+│   ├── Advanced_Python/
+│   ├── File_Handling/
+│   └── Database_Connectivity/
+│
+├── Database_Internals/
+│   ├── Architecture/
+│   ├── Indexing/
+│   ├── Transactions/
+│   ├── Query_Optimization/
+│   ├── Concurrency_Control/
+│   └── Performance_Tuning/
+│
+├── Practice_Problems/
+│   ├── SQL/
+│   ├── PL_SQL/
+│   ├── PostgreSQL/
+│   ├── MySQL/
+│   └── Python/
+│
+├── Projects/
+│
+├── README.md
+└── .gitignore
+```
+
+*Note: This is the planned repository organization. Folders can be added as the repository grows.*
+
+---
+
 **Created and maintained by Shubham Panchal**
 
 *Database Developer 2K27 | Learning Journey 2026–2027*
